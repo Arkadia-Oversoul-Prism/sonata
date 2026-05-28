@@ -1,32 +1,13 @@
-# Build outputs
-*.apk
-*.aab
-*.ap_
-*.dex
-
-# Build directories
-build/
-app/build/
-.gradle/
-
-# IDE files
-.idea/
 *.iml
-*.ipr
-*.iws
-local.properties
-*.log
-
-# OS files
+.gradle
+/local.properties
+/.idea
 .DS_Store
-Thumbs.db
-
-# Temporary files
-*.tmp
-*.bak
-*.swp
-
-# Release signing
+/build
+/captures
+.externalNativeBuild
+.cxx
+local.properties
+app/release/
 *.jks
 *.keystore
-release.properties
