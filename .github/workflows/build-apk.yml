@@ -2,13 +2,15 @@ name: Build Sonata APK
 
 on:
   push:
-    branches: [main, "feature/**"]
+    branches:
+      - main
+      - "feature/**"
   pull_request:
   workflow_dispatch:
 
 jobs:
   build:
-    name: Build & Sign Release APK
+    name: Build Release APK
     runs-on: ubuntu-latest
 
     steps:
@@ -25,43 +27,12 @@ jobs:
       - name: Make gradlew executable
         run: chmod +x gradlew
 
-      - name: Build Release APK
-        run: ./gradlew assembleRelease --no-daemon --stacktrace
+      - name: Build Release APK (unsigned)
+        run: ./gradlew assembleRelease --no-daemon
 
-      - name: Sign APK
-        if: ${{ secrets.SIGNING_KEY != '' }}
-        uses: r0adkll/sign-android-release@v1
-        id: sign
-        with:
-          releaseDirectory: app/build/outputs/apk/release
-          signingKeyBase64: ${{ secrets.SIGNING_KEY }}
-          alias:            ${{ secrets.KEY_ALIAS }}
-          keyStorePassword: ${{ secrets.KEY_STORE_PASSWORD }}
-          keyPassword:      ${{ secrets.KEY_PASSWORD }}
-        env:
-          BUILD_TOOLS_VERSION: "34.0.0"
-
-      - name: Upload Signed APK
-        if: ${{ secrets.SIGNING_KEY != '' }}
+      - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Sonata-release-signed-${{ github.sha }}
-          path: ${{ steps.sign.outputs.signedReleaseFile }}
-          retention-days: 30
-
-      - name: Upload Unsigned APK
-        if: ${{ secrets.SIGNING_KEY == '' }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: Sonata-release-unsigned-${{ github.sha }}
+          name: Sonata-release-${{ github.sha }}
           path: app/build/outputs/apk/release/*.apk
           retention-days: 30
-
-      - name: APK size report
-        if: always()
-        run: |
-          echo "### Build output" >> $GITHUB_STEP_SUMMARY
-          find app/build/outputs/apk -name "*.apk" 2>/dev/null | while read f; do
-            size=$(du -sh "$f" | cut -f1)
-            echo "- \`$(basename $f)\` — $size" >> $GITHUB_STEP_SUMMARY
-          done
