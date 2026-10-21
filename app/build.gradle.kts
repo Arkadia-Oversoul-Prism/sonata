@@ -35,6 +35,16 @@ android {
         buildConfig = true
     }
 
+    testOptions {
+        unitTests {
+            // android.util.Log is a stub on the JVM; returning defaults lets the
+            // engine's logic be tested without Robolectric. This does not make any
+            // Android framework *behaviour* available — the tests exercise the
+            // AudioPlayer / OfflineVoice / TtsTransport seams instead.
+            isReturnDefaultValues = true
+        }
+    }
+
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
@@ -54,4 +64,10 @@ dependencies {
     implementation(libs.okhttp)
     // MediaSessionCompat + MediaStyle notification
     implementation(libs.androidx.media)
+
+    // Unit tests run on the JVM. The engine's logic is exercised through the
+    // AudioPlayer / OfflineVoice / TtsTransport seams, so no Android framework
+    // or Robolectric is required.
+    testImplementation(libs.junit)
+    testImplementation(libs.kotlinx.coroutines.test)
 }

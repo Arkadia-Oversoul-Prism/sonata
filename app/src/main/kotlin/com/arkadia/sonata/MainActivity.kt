@@ -26,10 +26,19 @@ class MainActivity : AppCompatActivity() {
             speechService?.onPause    = { updateUi() }
             speechService?.onResume   = { updateUi() }
             speechService?.onComplete = { updateUi() }
+            // Surface failures instead of leaving the user with a silent no-op.
+            speechService?.onError    = { msg -> showMessage(msg) }
+            updateUi()
         }
         override fun onServiceDisconnected(name: ComponentName) {
             speechService = null
             updateUi()
+        }
+    }
+
+    private fun showMessage(msg: String) {
+        runOnUiThread {
+            Snackbar.make(binding.root, msg, Snackbar.LENGTH_LONG).show()
         }
     }
 
@@ -107,15 +116,15 @@ class MainActivity : AppCompatActivity() {
 
     private fun setupButtons() {
         binding.btnSpeak.setOnClickListener {
-            val text = binding.etTestInput.text?.toString()?.trim() ?: return@setOnClickListener
-            if (text.isEmpty()) return@setOnClickListener
-
-            val intent = Intent(this, SpeechService::class.java).apply {
-                action = SpeechService.ACTION_SPEAK
-                putExtra(SpeechService.EXTRA_TEXT,  text)
-                putExtra(SpeechService.EXTRA_LABEL, "SONATA TEST")
+            val text = binding.etTestInput.text?.toString()
+            when (TextLimits.validate(text)) {
+                is TextValidation.Empty -> showMessage("Enter some text first")
+                is TextValidation.Truncated -> {
+                    showMessage("Reading the first $MAX_TTS_CHARS characters")
+                    speak(text!!)
+                }
+                is TextValidation.Ready -> speak(text)
             }
-            startForegroundService(intent)
         }
 
         binding.btnPause.setOnClickListener  { speechService?.pause()  }
@@ -123,6 +132,15 @@ class MainActivity : AppCompatActivity() {
         binding.btnSettings.setOnClickListener {
             startActivity(Intent(this, SettingsActivity::class.java))
         }
+    }
+
+    private fun speak(text: String?) {
+        val intent = Intent(this, SpeechService::class.java).apply {
+            action = SpeechService.ACTION_SPEAK
+            putExtra(SpeechService.EXTRA_TEXT,  text)
+            putExtra(SpeechService.EXTRA_LABEL, "SONATA TEST")
+        }
+        startForegroundService(intent)
     }
 
     private fun checkOverlayPermission() {

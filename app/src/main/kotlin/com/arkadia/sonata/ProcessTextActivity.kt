@@ -13,25 +13,52 @@ import android.widget.Toast
  *
  * No UI is shown (transparent theme). The activity starts SpeechService
  * (foreground) and optionally FloatingOverlayService, then finishes.
- * Target latency: < 300ms from tap to speech start.
+ *
+ * The activity is `noHistory`, but a re-delivery while an instance is alive
+ * arrives through [onNewIntent]; both entry points share [handle] so a second
+ * selection does not depend on a fresh activity.
  */
 class ProcessTextActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        handle(intent)
+    }
 
-        val text = intent
-            ?.getCharSequenceExtra(Intent.EXTRA_PROCESS_TEXT)
-            ?.toString()
-            ?.trim()
+    override fun onNewIntent(intent: Intent?) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handle(intent)
+    }
 
-        if (text.isNullOrEmpty()) {
-            finish(); return
+    private fun handle(intent: Intent?) {
+        // Some apps send the read-only variant; accept either.
+        val raw = intent?.getCharSequenceExtra(Intent.EXTRA_PROCESS_TEXT)
+            ?: intent?.getCharSequenceExtra(Intent.EXTRA_PROCESS_TEXT_READONLY)
+
+        when (val validation = TextLimits.validate(raw)) {
+            is TextValidation.Empty -> {
+                // Nothing to read: do not start a foreground service for it.
+                finish()
+                return
+            }
+
+            is TextValidation.Ready -> dispatch(validation.text)
+
+            is TextValidation.Truncated -> {
+                Toast.makeText(
+                    this,
+                    "Reading the first $MAX_TTS_CHARS characters",
+                    Toast.LENGTH_SHORT
+                ).show()
+                dispatch(validation.text)
+            }
         }
 
-        val prefs = Prefs(this)
+        finish()
+    }
 
-        // ── Start foreground TTS service ──────────────────────────────────
+    private fun dispatch(text: String) {
         val speechIntent = Intent(this, SpeechService::class.java).apply {
             action = SpeechService.ACTION_SPEAK
             putExtra(SpeechService.EXTRA_TEXT,  text)
@@ -39,7 +66,7 @@ class ProcessTextActivity : Activity() {
         }
         startForegroundService(speechIntent)
 
-        // ── Show floating overlay if permitted ────────────────────────────
+        // Show the floating overlay if permitted; otherwise point at the setting.
         if (Settings.canDrawOverlays(this)) {
             val overlayIntent = Intent(this, FloatingOverlayService::class.java).apply {
                 putExtra(FloatingOverlayService.EXTRA_LABEL,   "ORACLE TRANSMISSION")
@@ -47,7 +74,6 @@ class ProcessTextActivity : Activity() {
             }
             startService(overlayIntent)
         } else {
-            // Prompt for overlay permission (non-blocking)
             Toast.makeText(
                 this,
                 "Grant 'Display over other apps' in Settings for the floating player.",
@@ -55,8 +81,6 @@ class ProcessTextActivity : Activity() {
             ).show()
             requestOverlayPermission()
         }
-
-        finish()
     }
 
     private fun requestOverlayPermission() {

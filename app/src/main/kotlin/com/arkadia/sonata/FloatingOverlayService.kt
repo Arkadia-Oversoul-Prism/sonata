@@ -119,7 +119,9 @@ class FloatingOverlayService : Service() {
     private fun setupButtons() {
         binding.btnPlayPause.setOnClickListener {
             val svc = speechService ?: return@setOnClickListener
-            if (svc.isPlaying) svc.pause() else svc.resume()
+            // Resume only when there is something to resume; otherwise the tap
+            // would claim a resume that cannot happen.
+            if (svc.isPlaying) svc.pause() else if (svc.isPaused) svc.resume()
             updatePlayPause()
         }
         binding.btnStop.setOnClickListener {
@@ -129,9 +131,8 @@ class FloatingOverlayService : Service() {
         binding.btnClose.setOnClickListener { stopSelf() }
 
         binding.btnSpeed.setOnClickListener {
-            val prefs  = Prefs(this)
-            val speeds = listOf(0.75f, 1.0f, 1.25f, 1.5f, 2.0f)
-            val next   = speeds[(speeds.indexOf(prefs.speed).takeIf { it >= 0 } ?: 1) + 1 % speeds.size]
+            val prefs = Prefs(this)
+            val next  = SpeedSteps.next(prefs.speed)
             prefs.speed = next
             binding.btnSpeed.text = "${next}×"
         }

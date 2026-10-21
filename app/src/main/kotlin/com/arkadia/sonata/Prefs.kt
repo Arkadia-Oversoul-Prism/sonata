@@ -6,23 +6,26 @@ import android.content.SharedPreferences
 /**
  * Thin SharedPreferences wrapper.
  * Keys are typed; all reads have safe defaults.
+ *
+ * Implements [TtsSettings] so the engine reads settings through a narrow,
+ * testable interface rather than depending on `SharedPreferences`.
  */
-class Prefs(context: Context) {
+class Prefs(context: Context) : TtsSettings {
 
     private val sp: SharedPreferences =
         context.applicationContext.getSharedPreferences("sonata_prefs", Context.MODE_PRIVATE)
 
-    var voice: String
+    override var voice: String
         get() = sp.getString(KEY_VOICE, "aria") ?: "aria"
         set(v) = sp.edit().putString(KEY_VOICE, v).apply()
 
     /** 0.5 – 2.0 */
-    var speed: Float
+    override var speed: Float
         get() = sp.getFloat(KEY_SPEED, 1.0f)
         set(v) = sp.edit().putFloat(KEY_SPEED, v).apply()
 
     /** 0.5 – 2.0  (Android TTS pitch; ignored for Edge TTS) */
-    var pitch: Float
+    override var pitch: Float
         get() = sp.getFloat(KEY_PITCH, 1.0f)
         set(v) = sp.edit().putFloat(KEY_PITCH, v).apply()
 
@@ -48,6 +51,14 @@ class Prefs(context: Context) {
     var preferEdgeTts: Boolean
         get() = sp.getBoolean(KEY_PREFER_EDGE, true)
         set(v) = sp.edit().putBoolean(KEY_PREFER_EDGE, v).apply()
+
+    // ── TtsSettings ────────────────────────────────────────────────────────
+    // The engine reads through these narrow names; the stored keys above keep
+    // their original names so existing installs keep their preferences.
+
+    override val backendUrl: String get() = edgeTtsUrl
+
+    override val preferOnline: Boolean get() = preferEdgeTts
 
     companion object {
         private const val KEY_VOICE         = "voice"
