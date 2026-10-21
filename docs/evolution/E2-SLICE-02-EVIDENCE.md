@@ -3,8 +3,24 @@
 **Protocol:** `Arkadia-Oversoul-Prism/sonata#1` (bounded recursive evolution)
 **Branch:** `feat/process-text-playback-hardening-01`
 **Base:** `4f7e6674caf2e8c9b12de4516ce3b25b68e65574`
-**Candidate SHA:** `404a84b6acf365ab7efd00e5fc098b691fae2be9`
 **Observation date:** 2026-10-21
+
+## 0. Revision index — which revision each result supports
+
+The pass produced three successive revisions. They are recorded separately
+because each result binds to one revision, and conflating them would overstate
+what was tested.
+
+| Revision | What it is | What it supports |
+|---|---|---|
+| `404a84b6acf365ab7efd00e5fc098b691fae2be9` | first candidate; source + device suite | local build and local 75-test run (§4) |
+| `17af283f187ff438fc934a8bbabaab86a2c4c93d` | adds the CI workflow repair | **the CI run** (`39689799028`, §4) — the only revision CI has executed |
+| `b55f6716d846dd78df1ce5744535c7b4583aecdf` | adds this evidence document | **the final candidate**; not itself CI-executed |
+
+`git diff 17af283 b55f671` is **19 insertions in this file and nothing else**, so
+the CI-tested tree and the final candidate share an identical implementation. That
+is an argument from the diff, not a claim that CI ran on `b55f671` — it did not.
+The next CI run on a later revision is what would bind CI evidence to it directly.
 
 This slice hardens three defects in the `PROCESS_TEXT → speech playback` path that
 Slice 01's unit tests could not see, because each one only appears when the real
@@ -167,6 +183,21 @@ is a step rather than something run only by hand.
 The count is read from the uploaded JUnit report, not from the job conclusion: a
 green job is not evidence that any test executed.
 
+### Independent artifact corroboration
+
+The release APK built by CI and the one built in this sandbox are **byte-identical**:
+
+| Artifact | sha256 |
+|---|---|
+| CI run `39689799028`, artifact `Sonata-release-17af283f…` | `7f5ab696352dd8328595b8b44f64e33ae9a06607a78aaee03d27a75bfaeccda8` |
+| local `./gradlew clean testDebugUnitTest assembleRelease` | `7f5ab696352dd8328595b8b44f64e33ae9a06607a78aaee03d27a75bfaeccda8` |
+
+Two different machines (a GitHub runner and this sandbox) producing an identical
+release artifact is independent corroboration that the build is reproducible and
+that the local result is not an environment artifact. It does not extend to the
+device boundary: an APK that builds identically can still behave differently on a
+device, which is exactly what §7 leaves unverified.
+
 ### Audits
 
 | Audit | Result |
@@ -198,12 +229,18 @@ placeholder STT, so none was added.
 - No Arkadia-repository inspection in this pass; the MIE/N-ATLAS/capability
   matrix the protocol asks for under E0 §4 is **not yet established**.
 
-## 7. Device protocol suite — recreated and committed
+## 7. Device protocol suite — 14 tests written and committed (not the lost 22)
 
-The 22-test device protocol was lost with the destroyed working copy (§1). It has
-been **recreated from the committed tree** and committed, so a restart cannot lose
-it again. It adds `app/src/androidTest/`, `testInstrumentationRunner`, and the
-instrumented test dependencies the module did not previously declare.
+The 22-test device protocol was lost with the destroyed working copy (§1). A
+**new, smaller suite of 14 tests** has been written from the committed tree and
+committed, so a restart cannot lose it again. It adds `app/src/androidTest/`,
+`testInstrumentationRunner`, and the instrumented test dependencies the module did
+not previously declare.
+
+The 22-test suite is **not** recreated and is **not** evidence: its tests, its
+results and its source are gone. The durable suite is the 14 committed here, and
+`grep -c '@Test'` over `app/src/androidTest/` returns 14 (5 + 9). The difference in
+count is not a regression — the two suites are unrelated artifacts.
 
 Two suites, both **compiled and packaged** into `app-debug-androidTest.apk`:
 
@@ -212,17 +249,41 @@ Two suites, both **compiled and packaged** into `app-debug-androidTest.apk`:
 | `DeviceVoiceProtocolTest` (5) | The real platform `TextToSpeech` engine: initialisation within a budget, that `awaitReady` observes the callback rather than a not-yet-set flag, that a shut-down engine resolves instead of hanging, that `speak()` reaches a terminal callback, and that `stop()` on an idle engine is safe |
 | `DeviceTransportProtocolTest` (9) | The shipped `OkHttpTtsTransport` against a real `MockWebServer` over loopback: that the debug policy permits loopback cleartext, that the payload matches the `/api/tts` contract, and that HTTP failure, non-audio content type, empty body, unreachable host, malformed URL and empty base URL each produce a `Failure` rather than an exception |
 
-**These tests have not been run.** This sandbox has no `/dev/kvm`, so no emulator
-can start. They are recorded as **compiled-but-unexecuted** — the strongest claim
-this environment supports. Running them is the next bounded candidate.
+**These tests have not been run.** They are recorded as
+**compiled-but-unexecuted** — the strongest claim this environment supports. The
+blocker is measured, not assumed:
 
-## 8. Next bounded candidate
+| Probe | Result |
+|---|---|
+| `/dev/kvm` | **absent** |
+| `/proc/cpuinfo` virtualisation flags (`vmx`/`svm`) | **0 occurrences** — the CPU exposes no virtualisation extensions at all |
+| `$ANDROID_HOME/emulator/emulator` | **not installed** |
+| `$ANDROID_HOME/system-images/` | **absent** |
+| `adb devices` | **no devices** |
+
+The absent CPU flags are the decisive one: without them no x86_64 system image can
+run, KVM or not, so this is a hardware/host limitation rather than a missing
+package. Installing the emulator and a system image would not change the outcome.
+See `docs/evolution/E4-DEVICE-PROTOCOL.md` for the prepared protocol and the exact
+command an operator with a device should run.
+
+## 8. Next bounded candidate — BLOCKED
 
 **Run the committed device suite on a real device or a KVM-capable emulator.**
 That is the only artifact that can close residual risks 1 and 3. Until it runs,
 the three repairs are proven at the JVM level only, and the device-level behaviour
 of `PROCESS_TEXT`, background playback, notification controls and interruption
 handling remains unverified.
+
+**This candidate is BLOCKED, and the blocker is measured.** `/proc/cpuinfo`
+reports **zero** `vmx`/`svm` flags, so no x86_64 system image can run on this host
+regardless of KVM or installed packages. No emulator binary or system image is
+present, and `adb devices` is empty. Installing packages would not change the
+outcome, so it was not attempted.
+
+The prepared protocol and the exact operator commands are in
+`docs/evolution/E4-DEVICE-PROTOCOL.md`. Until an operator with a device returns the
+evidence listed there, no device-level claim is made.
 
 ## 9. Statement of authority
 
