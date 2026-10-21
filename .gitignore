@@ -11,3 +11,6 @@ local.properties
 app/release/
 *.jks
 *.keystore
+# Per-module Gradle/Android build output (the root /build rule above does not
+# cover app/build, so build artifacts were stageable).
+/app/build/
