@@ -3,8 +3,10 @@ name: Build Sonata APK
 on:
   push:
     branches:
-      - main
-      - "feature/**"
+      # `feature/**` did not match this workstream's `feat/...` branch, so no
+      # push-triggered run had ever executed here and every push was silently
+      # ungated. Match any branch rather than depend on a naming prefix.
+      - "**"
   pull_request:
   workflow_dispatch:
 
@@ -27,8 +29,19 @@ jobs:
       - name: Make gradlew executable
         run: chmod +x gradlew
 
+      # The unit suite was previously run only by hand, so a green build said
+      # nothing about whether the tests passed. Run it here so the gate covers
+      # the behaviour the build alone cannot.
+      - name: Run unit tests
+        run: ./gradlew testDebugUnitTest --no-daemon
+
       - name: Build Release APK (unsigned)
         run: ./gradlew assembleRelease --no-daemon
+
+      # The device suites need an emulator and are not run here; compile them so
+      # the instrumented sources cannot silently rot.
+      - name: Compile instrumented tests
+        run: ./gradlew compileDebugAndroidTestKotlin --no-daemon
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
@@ -36,3 +49,11 @@ jobs:
           name: Sonata-release-${{ github.sha }}
           path: app/build/outputs/apk/release/*.apk
           retention-days: 30
+
+      - name: Upload test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Sonata-unit-test-reports-${{ github.sha }}
+          path: app/build/reports/tests/testDebugUnitTest/
+          retention-days: 14
