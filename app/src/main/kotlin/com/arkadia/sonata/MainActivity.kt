@@ -1,15 +1,20 @@
 package com.arkadia.sonata
 
+import android.Manifest
 import android.content.ComponentName
 import android.content.Intent
 import android.content.ServiceConnection
+import android.content.pm.PackageManager
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.os.IBinder
 import android.provider.Settings
 import android.widget.ArrayAdapter
 import android.widget.SeekBar
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.content.ContextCompat
 import com.arkadia.sonata.databinding.ActivityMainBinding
 import com.google.android.material.snackbar.Snackbar
 
@@ -54,7 +59,35 @@ class MainActivity : AppCompatActivity() {
         setupSpeedSeekBar()
         setupButtons()
         checkOverlayPermission()
+        requestNotificationPermissionIfNeeded()
     }
+
+    /**
+     * On API 33+ the playback notification is hidden unless the user grants
+     * `POST_NOTIFICATIONS`. The notification carries the pause/resume/stop
+     * controls, so without it playback is uncontrollable once the activity is
+     * gone — the request is part of the feature, not a nicety.
+     *
+     * A refusal is not fatal: the overlay and in-app controls still work, and the
+     * user is told where to re-enable it rather than being left guessing.
+     */
+    private fun requestNotificationPermissionIfNeeded() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
+        val granted = ContextCompat.checkSelfPermission(
+            this,
+            Manifest.permission.POST_NOTIFICATIONS,
+        ) == PackageManager.PERMISSION_GRANTED
+        if (granted) return
+
+        notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+    }
+
+    private val notificationPermissionLauncher =
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+            if (!granted) {
+                showMessage("Notifications are off — enable them to use the playback controls")
+            }
+        }
 
     override fun onStart() {
         super.onStart()
