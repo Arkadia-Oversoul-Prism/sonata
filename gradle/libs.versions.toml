@@ -10,6 +10,11 @@ coroutines       = "1.7.3"
 okhttp           = "4.12.0"
 media            = "1.7.0"
 junit            = "4.13.2"
+androidxTestRunner = "1.5.2"
+androidxTestRules = "1.5.0"
+androidxTestExt  = "1.1.5"
+espresso         = "3.5.1"
+okhttpMock       = "4.12.0"
 coroutinesTest   = "1.7.3"
 
 [libraries]
@@ -23,6 +28,11 @@ okhttp                     = { group = "com.squareup.okhttp3",       name = "okh
 androidx-media             = { group = "androidx.media",             name = "media",                   version.ref = "media" }
 junit                      = { group = "junit",                      name = "junit",                   version.ref = "junit" }
 kotlinx-coroutines-test    = { group = "org.jetbrains.kotlinx",     name = "kotlinx-coroutines-test",  version.ref = "coroutinesTest" }
+androidx-test-runner       = { group = "androidx.test",              name = "runner",                   version.ref = "androidxTestRunner" }
+androidx-test-rules        = { group = "androidx.test",              name = "rules",                    version.ref = "androidxTestRules" }
+androidx-test-ext-junit    = { group = "androidx.test.ext",          name = "junit",                    version.ref = "androidxTestExt" }
+espresso-core              = { group = "androidx.test.espresso",     name = "espresso-core",            version.ref = "espresso" }
+okhttp-mockwebserver       = { group = "com.squareup.okhttp3",       name = "mockwebserver",            version.ref = "okhttpMock" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }
