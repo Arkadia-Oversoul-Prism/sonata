@@ -2,6 +2,8 @@ package com.arkadia.sonata
 
 import java.io.File
 import java.util.concurrent.CopyOnWriteArrayList
+import kotlin.coroutines.CoroutineContext
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.withTimeoutOrNull
 
@@ -203,6 +205,34 @@ class FakeOfflineVoice(var ready: Boolean = true) : OfflineVoice {
     /** Simulate an offline speech failure. */
     fun fail(msg: String) {
         onError?.invoke(msg)
+    }
+}
+
+/**
+ * A dispatcher whose tasks run only when the test releases them.
+ *
+ * Needed to reproduce a cancellation landing inside the engine's main-thread hop:
+ * with a standard test dispatcher the hop completes synchronously, so the window
+ * the leak lives in never opens and the guard would pass against the defect it
+ * exists to catch. Tasks queue here and drain on [release].
+ */
+class GatedDispatcher : CoroutineDispatcher() {
+
+    private val queue = ArrayDeque<Runnable>()
+
+    override fun dispatch(context: CoroutineContext, block: Runnable) {
+        synchronized(queue) { queue.addLast(block) }
+    }
+
+    /** How many tasks are waiting to run. */
+    fun pending(): Int = synchronized(queue) { queue.size }
+
+    /** Run every queued task, including any enqueued while draining. */
+    fun release() {
+        while (true) {
+            val next = synchronized(queue) { queue.removeFirstOrNull() } ?: return
+            next.run()
+        }
     }
 }
 

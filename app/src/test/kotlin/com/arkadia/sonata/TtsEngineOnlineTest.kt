@@ -292,17 +292,38 @@ class TtsEngineOnlineTest {
 
     @Test
     fun `cancelling while the staged file is being handed off does not orphan it`() = runTest {
-        val h = harness(this)
+        // The leak lives in the window between writing the staged file and starting
+        // playback. With a standard test dispatcher the main-thread hop completes
+        // synchronously and that window never opens, so the guard would pass even
+        // against the defect it exists to catch. A gated dispatcher holds the hop
+        // open so a cancellation can land inside it, which is what the device
+        // protocol observed.
+        val gated = GatedDispatcher()
+        val cacheDir = temp.newFolder("gated-cache")
+        val engine = TtsEngine(
+            settings = FakeSettings(backendUrl = "https://example.test", preferOnline = true),
+            cacheDir = cacheDir,
+            transport = FakeTransport(),
+            player = FakeAudioPlayer(),
+            offline = FakeOfflineVoice(),
+            scope = this,
+            mainDispatcher = gated,
+        )
 
-        h.engine.speak("First")
-        // Drive the request only as far as the main-dispatcher hop, so a
-        // cancellation can land in the window where the file has been written but
-        // playback has not started.
+        engine.speak("First")
         runCurrent()
-        h.engine.stop()
-        advanceUntilIdle()
+        // The file is written and the hop to the main dispatcher is queued.
+        assertEquals("the hop must be held open by the gate", 1, gated.pending())
+        assertTrue("the staged file must exist at this point",
+            (cacheDir.listFiles()?.size ?: 0) == 1)
 
-        val leaked = h.cacheDir.listFiles()?.toList().orEmpty()
+        // Cancel while the hop is pending: this is the cancellation that used to
+        // orphan the file.
+        engine.stop()
+        advanceUntilIdle()
+        gated.release()
+
+        val leaked = cacheDir.listFiles()?.toList().orEmpty()
         assertTrue("staged files leaked: ${leaked.map { it.name }}", leaked.isEmpty())
     }
 

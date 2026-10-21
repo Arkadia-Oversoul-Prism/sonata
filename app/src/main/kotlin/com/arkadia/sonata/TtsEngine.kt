@@ -5,7 +5,6 @@ import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.isActive
@@ -298,32 +297,27 @@ class TtsEngine(
                         return@launch
                     }
 
+                    // Take ownership synchronously, with no suspension point between
+                    // staging and this assignment. From here every cancellation path
+                    // (a new speak, stop, shutdown) runs supersede(), which deletes
+                    // currentFile — so a cancellation landing during the hop to the
+                    // main dispatcher cannot orphan the file. Relying on a delete
+                    // inside the hop would miss exactly that cancellation, which is
+                    // how staged files accumulated in the device protocol.
+                    currentFile = file
+
                     if (myGeneration != generation) {
-                        file.delete()
+                        releaseStagedFile(file)
                         return@launch
                     }
 
-                    // From here the file is owned by this coroutine. The hop to the
-                    // main dispatcher is a suspension point, and supersede() cancels
-                    // this job: a cancellation landing during the hop would skip the
-                    // delete inside the block and orphan the staged file in the
-                    // cache. Releasing it on every exit path — including cancellation
-                    // — is what keeps repeated selections from accumulating files.
-                    var handedOff = false
-                    try {
-                        withContext(mainDispatcher) {
-                            // Re-check on the main thread: a newer speak() may have run
-                            // between the check above and this hop.
-                            if (myGeneration != generation) {
-                                file.delete()
-                            } else {
-                                handedOff = true
-                                playStagedFile(file, text)
-                            }
-                        }
-                    } finally {
-                        if (!handedOff) {
-                            withContext(NonCancellable) { file.delete() }
+                    withContext(mainDispatcher) {
+                        // Re-check on the main thread: a newer speak() may have run
+                        // between the check above and this hop.
+                        if (myGeneration != generation) {
+                            releaseStagedFile(file)
+                        } else {
+                            playStagedFile(file, text)
                         }
                     }
                 }
@@ -484,6 +478,18 @@ class TtsEngine(
         currentFile = null
         state = PlaybackState.Idle
         listener?.onComplete()
+    }
+
+    /**
+     * Release a staged file and stop tracking it.
+     *
+     * The identity check matters: a superseded coroutine resumes after a newer
+     * request has already staged its own file, and unconditionally clearing
+     * [currentFile] would drop that newer file from tracking and leak it instead.
+     */
+    private fun releaseStagedFile(file: File) {
+        file.delete()
+        if (currentFile === file) currentFile = null
     }
 
     private fun writeTempFile(bytes: ByteArray): File {
