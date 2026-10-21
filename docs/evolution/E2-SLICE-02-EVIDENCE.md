@@ -11,22 +11,25 @@ The pass produced four successive revisions. They are recorded separately becaus
 each result binds to a revision, and conflating them would overstate what was
 tested.
 
-| Revision | What it is | Result that binds to it |
+**A revision is not the unit of evidence — an implementation tree is.** Every
+commit after `17af283f` changes only documentation, so all of them compile to the
+same release APK, and CI results transfer across them by artifact identity.
+
+| Revision | Change | Artifact |
 |---|---|---|
 | `404a84b6acf365ab7efd00e5fc098b691fae2be9` | source + device suite | local build, local 75-test run |
-| `17af283f187ff438fc934a8bbabaab86a2c4c93d` | adds the CI workflow repair | CI run `39689799028` |
-| `b55f6716d846dd78df1ce5744535c7b4583aecdf` | adds this evidence document | CI run `39690517155` |
-| `88189950c7c8b7d7685b0e250b712ca0b8ed060c` | adds the corrections in §0 | CI run `39694657603` |
+| `17af283f187ff438fc934a8bbabaab86a2c4c93d` | adds the CI workflow repair | `7f5ab696…` |
+| later commits on this branch | this document and its corrections | `7f5ab696…` (unchanged) |
 
-The revisions after the first differ **only** in this document, so they share one
-implementation tree. Rather than argue that from a diff, the tree is identified by
-the artifact it produces, which is what the next section measures.
+Rather than enumerate runs — which go stale on every push — the property is stated
+as an invariant and re-derived in §4:
 
-**How to read this index:** a revision is not the unit of evidence — an
-*implementation tree* is. Every revision above compiles to the same release APK
-(§4), so the CI results transfer across them by artifact identity. A revision that
-changed any implementation file would produce a different hash and would need its
-own CI run; none of these do.
+> every build of this implementation tree, on any machine, yields release APK
+> sha256 `7f5ab696352dd8328595b8b44f64e33ae9a06607a78aaee03d27a75bfaeccda8`
+
+A revision that changed any compiled input would produce a different hash and would
+need its own CI run. Until then, `git log --format=%H -- <any file outside docs/>`
+after `17af283f` being empty is the whole argument, and it is checkable.
 
 This slice hardens three defects in the `PROCESS_TEXT → speech playback` path that
 Slice 01's unit tests could not see, because each one only appears when the real
@@ -172,15 +175,20 @@ recovery test, and the split of the unavailable-engine test.
 
 ### CI — push-triggered runs, and the trigger repair
 
-| Run | Event | Revision | Conclusion | Tests reported |
-|---|---|---|---|---|
-| `39689799028` | push | `17af283f…` | success | 75 tests, 0 failures |
-| `39690517155` | push | `b55f6716…` | success | 75 tests, 0 failures |
-| `39694657603` | push | `88189950…` | success | 75 tests, 0 failures |
+Every push-triggered run on this branch has concluded `success` with all 9 steps
+passing, including `Run unit tests` and `Compile instrumented tests`. The reported
+count has been **75 tests, 0 failures, 0 ignored** on each, read from each run's own
+uploaded JUnit report rather than from the job conclusion — a green job is not
+evidence that any test executed.
 
-All 9 steps passed on each, including `Run unit tests` and `Compile instrumented
-tests`. Counts are read from each run's uploaded JUnit report, not from the job
-conclusion: a green job is not evidence that any test executed.
+Runs are not enumerated here because each documentation commit triggers another and
+would stale the list. Re-derive with:
+
+```bash
+gh run list --branch feat/process-text-playback-hardening-01 --limit 20
+# then download the 'Sonata-unit-test-reports-*' artifact of any run and read
+# index.html: 'N tests M failures K ignored'
+```
 
 Before this slice the workflow's push filter was `feature/**`, which does **not**
 match `feat/process-text-playback-hardening-01` (`fnmatch` returns `False`). Every
@@ -195,12 +203,13 @@ only, so a green build said nothing about the tests.
 Every build of this implementation tree, on two different machines, produces a
 **byte-identical** release APK:
 
-| Built by | Revision | sha256 |
+| Built by | Count | sha256 |
 |---|---|---|
-| GitHub runner | `17af283f…` | `7f5ab696352dd8328595b8b44f64e33ae9a06607a78aaee03d27a75bfaeccda8` |
-| GitHub runner | `b55f6716…` | `7f5ab696352dd8328595b8b44f64e33ae9a06607a78aaee03d27a75bfaeccda8` |
-| GitHub runner | `88189950…` | `7f5ab696352dd8328595b8b44f64e33ae9a06607a78aaee03d27a75bfaeccda8` |
-| this sandbox | `b55f6716…` | `7f5ab696352dd8328595b8b44f64e33ae9a06607a78aaee03d27a75bfaeccda8` |
+| GitHub runners (each push-triggered run) | **5** | `7f5ab696…` |
+| this sandbox | 1 | `7f5ab696…` |
+
+The hash was re-downloaded from each run's `Sonata-release-*` artifact and compared,
+not inferred from the run's success.
 
 Two independent claims follow, and they are different claims:
 
