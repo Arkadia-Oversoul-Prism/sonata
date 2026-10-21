@@ -118,3 +118,54 @@ authorized rather than assumed.
 
 Candidates 2–5 (long-form reader, STT, Neural Voice Studio, Arkadia voice agent,
 release/migration audit) remain as listed in issue #1 §E4 and are **not** started.
+
+---
+
+## 6. CI verification (added after §1–§5)
+
+### F-5 (recorded, not repaired) — the workflow's push filter does not match this branch
+`.github/workflows/build-apk.yml` triggers on push to `main` and **`feature/**`**. This
+branch is `feat/process-text-playback-hardening-01`, which does **not** match, so pushing
+it produced **no run** (`gh run list --branch feat/process-text-playback-hardening-01`
+→ `no runs found`). The `pull_request` trigger would also not fire, because no PR was
+opened.
+
+The CI evidence below was therefore obtained by dispatching the workflow explicitly:
+
+```
+gh workflow run "Build Sonata APK" --ref feat/process-text-playback-hardening-01
+```
+
+**Proposed bounded change (not performed here, to avoid silent scope expansion):** add
+`feat/**` to the `push.branches` filter, or replace the two globs with a single
+`branches-ignore`-style rule that does not depend on a branch-name prefix. Until that
+lands, every push to a `feat/*` branch is silently ungated — which is precisely the class
+of defect that let eight consecutive failures accumulate unnoticed on the base branch.
+
+### Run `39660231687` — the first successful CI run in this repository's history
+
+| Field | Value |
+|---|---|
+| Run | `39660231687` (`workflow_dispatch`) |
+| Head SHA | `4d579ef16e85b185b1c6e1b2182f61756856ac83` |
+| Conclusion | **success** |
+| Job | `Build Release APK` (`119431012748`), 2m32s |
+| Step log | `./gradlew assembleRelease --no-daemon` → **`BUILD SUCCESSFUL in 2m 19s`** |
+| Artifact | `Sonata-release-4d579ef16e85b185b1c6e1b2182f61756856ac83`, uploaded, `expired: false` |
+
+All eight previously recorded runs on this repository were `conclusion=failure`. This is
+the first run in which the build step reached and completed `assembleRelease`, and the
+first time an APK artifact has been produced by CI at all (the base tip's
+`Upload APK artifact` step was `skipped`).
+
+### Scope of this CI evidence
+
+A green CI run is evidence about **this exact candidate** (`4d579ef`) and nothing more.
+It is **not**:
+
+- evidence of device behaviour — no emulator ran;
+- evidence of backend behaviour — the CI job does not call `/api/tts`;
+- evidence that the 69 unit tests ran — the workflow runs `assembleRelease` only, so the
+  unit suite was executed **locally**, not in CI. Wiring `testDebugUnitTest` into the
+  workflow is a separate bounded change, proposed and not performed;
+- release authorization. Human approval remains required.
