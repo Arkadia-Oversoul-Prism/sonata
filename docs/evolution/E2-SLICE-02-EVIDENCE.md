@@ -148,6 +148,25 @@ Test breakdown: 25 online + 15 offline + 10 playback-state + 8 speech-command
 Slice 01 recorded 69 tests. The `+6` are the four new readiness/leak tests, the
 recovery test, and the split of the unavailable-engine test.
 
+### CI — first push-triggered run in this repository's history
+
+| Field | Value |
+|---|---|
+| Run | `39689799028` (`event=push`, `conclusion=success`) |
+| Head SHA | `17af283f187ff438fc934a8bbabaab86a2c4c93d` |
+| Steps | all 9 success, including `Run unit tests` and `Compile instrumented tests` |
+| Test report artifact | `Sonata-unit-test-reports-17af283f…` (12,225 bytes) |
+| Tests as reported by CI | **75 tests, 0 failures, 0 ignored, 100% success** |
+
+The workflow's push filter was `feature/**`, which does **not** match this
+workstream's `feat/process-text-playback-hardening-01` (`fnmatch` returns `False`).
+Every push to this branch had therefore been ungated, and the single prior run was
+a manual `workflow_dispatch`. The filter now matches any branch, and the unit suite
+is a step rather than something run only by hand.
+
+The count is read from the uploaded JUnit report, not from the job conclusion: a
+green job is not evidence that any test executed.
+
 ### Audits
 
 | Audit | Result |
