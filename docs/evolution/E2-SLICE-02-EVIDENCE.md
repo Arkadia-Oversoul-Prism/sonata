@@ -7,20 +7,26 @@
 
 ## 0. Revision index — which revision each result supports
 
-The pass produced three successive revisions. They are recorded separately
-because each result binds to one revision, and conflating them would overstate
-what was tested.
+The pass produced four successive revisions. They are recorded separately because
+each result binds to a revision, and conflating them would overstate what was
+tested.
 
-| Revision | What it is | What it supports |
+| Revision | What it is | Result that binds to it |
 |---|---|---|
-| `404a84b6acf365ab7efd00e5fc098b691fae2be9` | first candidate; source + device suite | local build and local 75-test run (§4) |
-| `17af283f187ff438fc934a8bbabaab86a2c4c93d` | adds the CI workflow repair | **the CI run** (`39689799028`, §4) — the only revision CI has executed |
-| `b55f6716d846dd78df1ce5744535c7b4583aecdf` | adds this evidence document | **the final candidate**; not itself CI-executed |
+| `404a84b6acf365ab7efd00e5fc098b691fae2be9` | source + device suite | local build, local 75-test run |
+| `17af283f187ff438fc934a8bbabaab86a2c4c93d` | adds the CI workflow repair | CI run `39689799028` |
+| `b55f6716d846dd78df1ce5744535c7b4583aecdf` | adds this evidence document | CI run `39690517155` |
+| `88189950c7c8b7d7685b0e250b712ca0b8ed060c` | adds the corrections in §0 | CI run `39694657603` |
 
-`git diff 17af283 b55f671` is **19 insertions in this file and nothing else**, so
-the CI-tested tree and the final candidate share an identical implementation. That
-is an argument from the diff, not a claim that CI ran on `b55f671` — it did not.
-The next CI run on a later revision is what would bind CI evidence to it directly.
+The revisions after the first differ **only** in this document, so they share one
+implementation tree. Rather than argue that from a diff, the tree is identified by
+the artifact it produces, which is what the next section measures.
+
+**How to read this index:** a revision is not the unit of evidence — an
+*implementation tree* is. Every revision above compiles to the same release APK
+(§4), so the CI results transfer across them by artifact identity. A revision that
+changed any implementation file would produce a different hash and would need its
+own CI run; none of these do.
 
 This slice hardens three defects in the `PROCESS_TEXT → speech playback` path that
 Slice 01's unit tests could not see, because each one only appears when the real
@@ -164,39 +170,48 @@ Test breakdown: 25 online + 15 offline + 10 playback-state + 8 speech-command
 Slice 01 recorded 69 tests. The `+6` are the four new readiness/leak tests, the
 recovery test, and the split of the unavailable-engine test.
 
-### CI — first push-triggered run in this repository's history
+### CI — push-triggered runs, and the trigger repair
 
-| Field | Value |
-|---|---|
-| Run | `39689799028` (`event=push`, `conclusion=success`) |
-| Head SHA | `17af283f187ff438fc934a8bbabaab86a2c4c93d` |
-| Steps | all 9 success, including `Run unit tests` and `Compile instrumented tests` |
-| Test report artifact | `Sonata-unit-test-reports-17af283f…` (12,225 bytes) |
-| Tests as reported by CI | **75 tests, 0 failures, 0 ignored, 100% success** |
+| Run | Event | Revision | Conclusion | Tests reported |
+|---|---|---|---|---|
+| `39689799028` | push | `17af283f…` | success | 75 tests, 0 failures |
+| `39690517155` | push | `b55f6716…` | success | 75 tests, 0 failures |
+| `39694657603` | push | `88189950…` | success | 75 tests, 0 failures |
 
-The workflow's push filter was `feature/**`, which does **not** match this
-workstream's `feat/process-text-playback-hardening-01` (`fnmatch` returns `False`).
-Every push to this branch had therefore been ungated, and the single prior run was
-a manual `workflow_dispatch`. The filter now matches any branch, and the unit suite
-is a step rather than something run only by hand.
+All 9 steps passed on each, including `Run unit tests` and `Compile instrumented
+tests`. Counts are read from each run's uploaded JUnit report, not from the job
+conclusion: a green job is not evidence that any test executed.
 
-The count is read from the uploaded JUnit report, not from the job conclusion: a
-green job is not evidence that any test executed.
+Before this slice the workflow's push filter was `feature/**`, which does **not**
+match `feat/process-text-playback-hardening-01` (`fnmatch` returns `False`). Every
+push to this branch had therefore been ungated, and the only prior run in the
+repository's history was a manual `workflow_dispatch`. The three runs above are the
+first push-triggered runs this repository has ever had, and the first time the unit
+suite has been executed by CI at all — the job previously ran `assembleRelease`
+only, so a green build said nothing about the tests.
 
-### Independent artifact corroboration
+### Artifact identity — four independent builds agree
 
-The release APK built by CI and the one built in this sandbox are **byte-identical**:
+Every build of this implementation tree, on two different machines, produces a
+**byte-identical** release APK:
 
-| Artifact | sha256 |
-|---|---|
-| CI run `39689799028`, artifact `Sonata-release-17af283f…` | `7f5ab696352dd8328595b8b44f64e33ae9a06607a78aaee03d27a75bfaeccda8` |
-| local `./gradlew clean testDebugUnitTest assembleRelease` | `7f5ab696352dd8328595b8b44f64e33ae9a06607a78aaee03d27a75bfaeccda8` |
+| Built by | Revision | sha256 |
+|---|---|---|
+| GitHub runner | `17af283f…` | `7f5ab696352dd8328595b8b44f64e33ae9a06607a78aaee03d27a75bfaeccda8` |
+| GitHub runner | `b55f6716…` | `7f5ab696352dd8328595b8b44f64e33ae9a06607a78aaee03d27a75bfaeccda8` |
+| GitHub runner | `88189950…` | `7f5ab696352dd8328595b8b44f64e33ae9a06607a78aaee03d27a75bfaeccda8` |
+| this sandbox | `b55f6716…` | `7f5ab696352dd8328595b8b44f64e33ae9a06607a78aaee03d27a75bfaeccda8` |
 
-Two different machines (a GitHub runner and this sandbox) producing an identical
-release artifact is independent corroboration that the build is reproducible and
-that the local result is not an environment artifact. It does not extend to the
-device boundary: an APK that builds identically can still behave differently on a
-device, which is exactly what §7 leaves unverified.
+Two independent claims follow, and they are different claims:
+
+1. **The build is reproducible across environments.** A GitHub runner and this
+   sandbox agree bit for bit, so the local result is not an environment artifact.
+2. **The revisions after `17af283` are the same implementation.** Three of them
+   produce the identical artifact, so they cannot differ in any compiled input.
+   This is what licenses reading the CI results in §0 as one body of evidence.
+
+Neither claim extends to device behaviour. An APK that builds identically can still
+behave differently on a device, which is exactly what §7 leaves unverified.
 
 ### Audits
 
