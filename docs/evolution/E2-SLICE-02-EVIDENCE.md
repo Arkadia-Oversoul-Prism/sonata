@@ -3,7 +3,7 @@
 **Protocol:** `Arkadia-Oversoul-Prism/sonata#1` (bounded recursive evolution)
 **Branch:** `feat/process-text-playback-hardening-01`
 **Base:** `4f7e6674caf2e8c9b12de4516ce3b25b68e65574`
-**Candidate SHA:** `9498ebefde98b940b65608f0a01b11ab255fcec5`
+**Candidate SHA:** `404a84b6acf365ab7efd00e5fc098b691fae2be9`
 **Observation date:** 2026-10-21
 
 This slice hardens three defects in the `PROCESS_TEXT → speech playback` path that
@@ -137,6 +137,8 @@ Toolchain: Temurin JDK `17.0.20.1+1`, Android SDK `platforms;android-34` /
 | Command | Result |
 |---|---|
 | `./gradlew clean testDebugUnitTest assembleRelease --no-daemon` | **BUILD SUCCESSFUL** |
+| `./gradlew testDebugUnitTest assembleDebug assembleRelease assembleDebugAndroidTest --no-daemon` | **BUILD SUCCESSFUL** (2m12s) |
+| `./gradlew compileDebugAndroidTestKotlin --no-daemon` | **BUILD SUCCESSFUL** |
 | unit tests | **75 tests, 0 failures, 0 errors, 0 skipped** |
 | release APK | produced (unsigned), 3,110,031 bytes, sha256 `7f5ab696352dd8328595b8b44f64e33ae9a06607a78aaee03d27a75bfaeccda8` |
 
@@ -177,15 +179,33 @@ placeholder STT, so none was added.
 - No Arkadia-repository inspection in this pass; the MIE/N-ATLAS/capability
   matrix the protocol asks for under E0 §4 is **not yet established**.
 
-## 7. Next bounded candidate
+## 7. Device protocol suite — recreated and committed
 
-**Rewrite the instrumented device suite from the committed tree**, then run it if
-a device becomes available. The suite is the only artifact that can close residual
-risks 1 and 3, and it must be committed this time so a restart cannot lose it
-again. It needs `app/src/androidTest/` and the instrumented test dependencies,
-which `app/build.gradle.kts` does not currently declare.
+The 22-test device protocol was lost with the destroyed working copy (§1). It has
+been **recreated from the committed tree** and committed, so a restart cannot lose
+it again. It adds `app/src/androidTest/`, `testInstrumentationRunner`, and the
+instrumented test dependencies the module did not previously declare.
 
-## 8. Statement of authority
+Two suites, both **compiled and packaged** into `app-debug-androidTest.apk`:
+
+| Suite | What it can only test on a device |
+|---|---|
+| `DeviceVoiceProtocolTest` (5) | The real platform `TextToSpeech` engine: initialisation within a budget, that `awaitReady` observes the callback rather than a not-yet-set flag, that a shut-down engine resolves instead of hanging, that `speak()` reaches a terminal callback, and that `stop()` on an idle engine is safe |
+| `DeviceTransportProtocolTest` (9) | The shipped `OkHttpTtsTransport` against a real `MockWebServer` over loopback: that the debug policy permits loopback cleartext, that the payload matches the `/api/tts` contract, and that HTTP failure, non-audio content type, empty body, unreachable host, malformed URL and empty base URL each produce a `Failure` rather than an exception |
+
+**These tests have not been run.** This sandbox has no `/dev/kvm`, so no emulator
+can start. They are recorded as **compiled-but-unexecuted** — the strongest claim
+this environment supports. Running them is the next bounded candidate.
+
+## 8. Next bounded candidate
+
+**Run the committed device suite on a real device or a KVM-capable emulator.**
+That is the only artifact that can close residual risks 1 and 3. Until it runs,
+the three repairs are proven at the JVM level only, and the device-level behaviour
+of `PROCESS_TEXT`, background playback, notification controls and interruption
+handling remains unverified.
+
+## 9. Statement of authority
 
 No merge, deploy, release, production configuration change, or secret change was
 performed. The branch is pushed to `feat/process-text-playback-hardening-01` for
