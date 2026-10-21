@@ -350,6 +350,56 @@ class TtsEngineOnlineTest {
     }
 
     @Test
+    fun `a failure does not poison the request that follows it`() = runTest {
+        // First request fails and falls back; the second must succeed normally on
+        // the online engine. A state left behind by the failure (a stale file, a
+        // stuck paused/generation flag) would surface here as a second offline
+        // fallback or as an error.
+        val transport = FakeTransport(
+            sequence = listOf(
+                SynthesisResult.Failure("Backend returned HTTP 502"),
+                SynthesisResult.Success(ByteArray(64) { 1 }, "audio/mpeg", "edge_tts"),
+            ),
+        )
+        val player = FakeAudioPlayer()
+        val offline = FakeOfflineVoice()
+        val listener = RecordingListener()
+        val cacheDir = temp.newFolder("poison-cache")
+        val engine = TtsEngine(
+            settings = FakeSettings(backendUrl = "https://example.test", preferOnline = true),
+            cacheDir = cacheDir,
+            transport = transport,
+            player = player,
+            offline = offline,
+            scope = this,
+            mainDispatcher = StandardTestDispatcher(testScheduler),
+        )
+        engine.listener = listener
+
+        engine.speak("First request")
+        advanceUntilIdle()
+        // The failure fell back to the offline voice.
+        assertEquals(1, offline.utterances.size)
+        assertEquals(TtsEngineKind.OFFLINE, listener.failures.first().fellBackTo)
+
+        engine.speak("Second request")
+        advanceUntilIdle()
+
+        // The second request used the online engine: the failure did not poison it.
+        // Both requests reached the backend, and the second is the only one that
+        // played, because the first fell back to the offline voice.
+        assertEquals(2, transport.requests.size)
+        assertEquals(1, player.playCalls)
+        assertEquals(1, offline.utterances.size)
+        assertTrue(listener.starts.any { it.engine == TtsEngineKind.ONLINE })
+        // Only the first failure was reported; the success added none.
+        assertEquals(1, listener.failures.size)
+        // Exactly one file is staged: the second request's, which is playing. The
+        // failed request left nothing behind.
+        assertEquals(1, cacheDir.listFiles()?.size ?: 0)
+    }
+
+    @Test
     fun `a stale result arriving after supersession never starts playback`() = runTest {
         val h = harness(this, delayMs = 100)
 

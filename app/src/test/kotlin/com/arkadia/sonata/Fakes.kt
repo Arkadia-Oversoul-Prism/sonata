@@ -24,6 +24,12 @@ class FakeTransport(
         engineLabel = "edge_tts",
     ),
     private val delayMs: Long = 0,
+    /**
+     * Per-call results. When non-empty the nth call returns the nth entry, and
+     * calls beyond the list reuse the last entry. Needed to model a failure
+     * followed by a success, which is how a poisoned state would show itself.
+     */
+    private val sequence: List<SynthesisResult> = emptyList(),
 ) : TtsTransport {
 
     val requests = CopyOnWriteArrayList<Triple<String, String, Float>>()
@@ -36,9 +42,14 @@ class FakeTransport(
         speed: Float,
         baseUrl: String,
     ): SynthesisResult {
+        val callIndex = requests.size
         requests += Triple(text, voice, speed)
         if (delayMs > 0) kotlinx.coroutines.delay(delayMs)
-        return result
+        return if (sequence.isEmpty()) {
+            result
+        } else {
+            sequence[minOf(callIndex, sequence.size - 1)]
+        }
     }
 
     override fun close() {
