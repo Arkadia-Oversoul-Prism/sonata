@@ -307,14 +307,25 @@ class TtsEngineOnlineTest {
     }
 
     @Test
-    fun `rapid requests do not accumulate staged files`() = runTest {
+    fun `rapid requests leave only the playing file staged`() = runTest {
         val h = harness(this)
 
         repeat(5) { h.engine.speak("Request number " + it) }
         advanceUntilIdle()
 
-        val leaked = h.cacheDir.listFiles()?.toList().orEmpty()
-        assertTrue("staged files leaked: ${leaked.map { it.name }}", leaked.isEmpty())
+        // Four requests were superseded and must be gone; the fifth is playing, so
+        // its file is in use. Asserting "empty" here would demand the engine delete
+        // audio it is currently playing.
+        val staged = h.cacheDir.listFiles()?.toList().orEmpty()
+        assertEquals("only the playing request's file may remain: ${staged.map { it.name }}",
+            1, staged.size)
+
+        // Once playback is abandoned nothing may remain.
+        h.engine.stop()
+        advanceUntilIdle()
+        val afterStop = h.cacheDir.listFiles()?.toList().orEmpty()
+        assertTrue("stop must release every staged file: ${afterStop.map { it.name }}",
+            afterStop.isEmpty())
     }
 
     @Test
