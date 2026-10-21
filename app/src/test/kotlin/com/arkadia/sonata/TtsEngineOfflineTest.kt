@@ -4,6 +4,7 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -30,14 +31,24 @@ class TtsEngineOfflineTest {
         val settings: FakeSettings,
     )
 
-    private fun harness(scope: TestScope): Harness {
-        val offline = FakeOfflineVoice()
+    private fun harness(
+        scope: TestScope,
+        ready: Boolean = true,
+        result: SynthesisResult = SynthesisResult.Success(
+            bytes = ByteArray(64) { 1 },
+            contentType = "audio/mpeg",
+            engineLabel = "edge_tts",
+        ),
+        backendUrl: String = "",
+        preferOnline: Boolean = false,
+    ): Harness {
+        val offline = FakeOfflineVoice(ready = ready)
         val listener = RecordingListener()
-        val settings = FakeSettings(backendUrl = "", preferOnline = false)
+        val settings = FakeSettings(backendUrl = backendUrl, preferOnline = preferOnline)
         val engine = TtsEngine(
             settings = settings,
             cacheDir = temp.newFolder("cache"),
-            transport = FakeTransport(),
+            transport = FakeTransport(result = result),
             player = FakeAudioPlayer(),
             offline = offline,
             scope = scope,
@@ -187,24 +198,74 @@ class TtsEngineOfflineTest {
 
     @Test
     fun `an unavailable offline engine reports a clear failure`() = runTest {
-        val scope = TestScope(StandardTestDispatcher())
-        val offline = FakeOfflineVoice(ready = false)
-        val listener = RecordingListener()
-        val engine = TtsEngine(
-            settings = FakeSettings(backendUrl = "", preferOnline = false),
-            cacheDir = temp.newFolder("cache2"),
-            transport = FakeTransport(),
-            player = FakeAudioPlayer(),
-            offline = offline,
-            scope = scope,
-            mainDispatcher = StandardTestDispatcher(scope.testScheduler),
+        val h = harness(this, ready = false)
+
+        h.engine.speak("Hello")
+        // Readiness is resolved asynchronously now: let the wait begin, then deny it.
+        runCurrent()
+        h.offline.denyReadiness()
+        advanceUntilIdle()
+
+        assertTrue(h.offline.utterances.isEmpty())
+        assertTrue(h.listener.failures.first().msg.contains("Offline voice is unavailable"))
+        assertFalse(h.engine.isPlaying)
+    }
+
+    @Test
+    fun `a cold start waits for the engine to become ready and then speaks`() = runTest {
+        // Not ready at construction: the real cold-start condition, since the
+        // platform engine completes initialisation in a callback.
+        val h = harness(this, ready = false)
+
+        h.engine.speak("Cold start utterance")
+        runCurrent()
+        // Nothing spoken yet: the engine is still initialising.
+        assertTrue("must not speak before the engine is ready", h.offline.utterances.isEmpty())
+
+        // The platform callback lands.
+        h.offline.becomeReady()
+        advanceUntilIdle()
+
+        assertEquals(1, h.offline.utterances.size)
+        assertEquals("Cold start utterance", h.offline.utterances[0].text)
+        assertTrue(h.listener.starts.any { it.engine == TtsEngineKind.OFFLINE })
+    }
+
+    @Test
+    fun `a cold start fallback waits for readiness and reports the degradation`() = runTest {
+        val h = harness(
+            this,
+            ready = false,
+            result = SynthesisResult.Failure("Backend returned HTTP 502"),
+            backendUrl = "https://example.invalid",
+            preferOnline = true,
         )
-        engine.listener = listener
 
-        engine.speak("Hello")
+        h.engine.speak("Falling back on a cold start")
+        // runCurrent, not advanceUntilIdle: advancing virtual time here would fire
+        // the readiness bound before the engine ever had a chance to initialise.
+        runCurrent()
+        // The online failure is known, but there is nothing to fall back to yet.
+        assertTrue(h.offline.utterances.isEmpty())
 
-        assertTrue(offline.utterances.isEmpty())
-        assertTrue(listener.failures.first().msg.contains("Offline voice is unavailable"))
-        assertFalse(engine.isPlaying)
+        h.offline.becomeReady()
+        advanceUntilIdle()
+
+        // The degradation is still reported, and speech continues.
+        assertEquals(1, h.offline.utterances.size)
+        assertEquals(TtsEngineKind.OFFLINE, h.listener.failures.first().fellBackTo)
+    }
+
+    @Test
+    fun `a superseded request does not speak once readiness arrives`() = runTest {
+        val h = harness(this, ready = false)
+
+        h.engine.speak("Superseded while waiting")
+        runCurrent()
+        h.engine.stop()
+        h.offline.becomeReady()
+        advanceUntilIdle()
+
+        assertTrue("a superseded utterance must not start", h.offline.utterances.isEmpty())
     }
 }

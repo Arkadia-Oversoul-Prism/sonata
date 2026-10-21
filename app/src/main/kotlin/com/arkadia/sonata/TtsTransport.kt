@@ -120,7 +120,7 @@ class OkHttpTtsTransport(
                 )
             }
         } catch (e: Exception) {
-            SynthesisResult.Failure("Network error: ${e.javaClass.simpleName}")
+            SynthesisResult.Failure(describeFailure(e))
         }
     }
 
@@ -130,6 +130,24 @@ class OkHttpTtsTransport(
 
     companion object {
         private val JSON_MEDIA_TYPE = "application/json; charset=utf-8".toMediaType()
+
+        /**
+         * A user-presentable reason for a failed request.
+         *
+         * Android blocks cleartext HTTP by default from API 28, and the resulting
+         * UnknownServiceException carries a message written for a developer
+         * ("CLEARTEXT communication to ... not permitted by network security
+         * policy"), not for the person who typed the URL. Reporting only the
+         * exception class would leave the user with no idea that the remedy is an
+         * https:// backend, so the block is named explicitly.
+         */
+        fun describeFailure(e: Exception): String = when {
+            e is java.net.UnknownServiceException &&
+                e.message?.contains("CLEARTEXT", ignoreCase = true) == true ->
+                "This backend uses plain HTTP, which Android blocks. Use an https:// URL."
+
+            else -> "Network error: ${e.javaClass.simpleName}"
+        }
 
         /**
          * The backend synthesises the whole utterance before responding, so the

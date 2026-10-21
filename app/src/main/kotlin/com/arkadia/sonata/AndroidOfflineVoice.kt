@@ -6,6 +6,8 @@ import android.speech.tts.UtteranceProgressListener
 import android.util.Log
 import java.util.Locale
 import java.util.UUID
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.withTimeoutOrNull
 
 /**
  * [OfflineVoice] backed by the platform `TextToSpeech` engine.
@@ -21,6 +23,14 @@ class AndroidOfflineVoice(
 ) : OfflineVoice {
 
     private var tts: TextToSpeech? = null
+
+    /**
+     * Completed from the platform initialisation callback. A deferred rather than
+     * a plain flag so a caller can wait for the callback instead of polling it.
+     */
+    @Volatile
+    private var readySignal = CompletableDeferred<Boolean>()
+
     private var ready = false
 
     /** Offset, within the currently spoken string, of the last character reached. */
@@ -32,6 +42,7 @@ class AndroidOfflineVoice(
     init {
         tts = TextToSpeech(context) { status ->
             ready = status == TextToSpeech.SUCCESS
+            readySignal.complete(ready)
             if (ready) {
                 // Locale.US is the correct locale for the backend's voice catalogue
                 // (en-US / en-GB neural voices); failure is non-fatal.
@@ -45,6 +56,14 @@ class AndroidOfflineVoice(
     }
 
     override fun isReady(): Boolean = ready
+
+    override suspend fun awaitReady(timeoutMs: Long): Boolean {
+        if (ready) return true
+        // A non-positive bound means "do not wait". Bounding the wait matters:
+        // a platform engine that never calls back must not suspend speech forever.
+        if (timeoutMs <= 0) return ready
+        return withTimeoutOrNull(timeoutMs) { readySignal.await() } ?: false
+    }
 
     override fun speak(
         text: String,
@@ -128,6 +147,9 @@ class AndroidOfflineVoice(
         tts?.shutdown()
         tts = null
         ready = false
+        // A waiter must not hang on a shut-down engine; re-arm the signal so a
+        // later awaitReady() resolves immediately as "not ready".
+        readySignal = CompletableDeferred<Boolean>().apply { complete(false) }
     }
 
     private companion object {

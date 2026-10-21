@@ -5,6 +5,7 @@ import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.isActive
@@ -52,6 +53,16 @@ class TtsEngine(
      * scheduler, because `Dispatchers.Main` has no JVM implementation.
      */
     private val mainDispatcher: CoroutineDispatcher = Dispatchers.Main,
+    /**
+     * How long the offline path waits for the platform engine to finish
+     * initialising before reporting it unavailable.
+     *
+     * Injectable because initialisation cost is device-dependent: sub-second on
+     * hardware, but inflated by orders of magnitude on a software-emulated
+     * (no-KVM) Android runtime. Device tests raise it so they measure behaviour
+     * rather than emulation speed; production uses [DEFAULT_OFFLINE_READY_TIMEOUT_MS].
+     */
+    private val offlineReadyTimeoutMs: Long = DEFAULT_OFFLINE_READY_TIMEOUT_MS,
 ) {
 
     /**
@@ -292,13 +303,27 @@ class TtsEngine(
                         return@launch
                     }
 
-                    withContext(mainDispatcher) {
-                        // Re-check on the main thread: a newer speak() may have run
-                        // between the check above and this hop.
-                        if (myGeneration != generation) {
-                            file.delete()
-                        } else {
-                            playStagedFile(file, text)
+                    // From here the file is owned by this coroutine. The hop to the
+                    // main dispatcher is a suspension point, and supersede() cancels
+                    // this job: a cancellation landing during the hop would skip the
+                    // delete inside the block and orphan the staged file in the
+                    // cache. Releasing it on every exit path — including cancellation
+                    // — is what keeps repeated selections from accumulating files.
+                    var handedOff = false
+                    try {
+                        withContext(mainDispatcher) {
+                            // Re-check on the main thread: a newer speak() may have run
+                            // between the check above and this hop.
+                            if (myGeneration != generation) {
+                                file.delete()
+                            } else {
+                                handedOff = true
+                                playStagedFile(file, text)
+                            }
+                        }
+                    } finally {
+                        if (!handedOff) {
+                            withContext(NonCancellable) { file.delete() }
                         }
                     }
                 }
@@ -341,15 +366,44 @@ class TtsEngine(
      * has a state to update, and is rolled back if the utterance fails to start.
      */
     private fun speakOffline(text: String, fromChar: Int, reportedFallback: String?) {
-        if (!offline.isReady()) {
-            state = PlaybackState.Idle
-            listener?.onError(
-                reportedFallback?.let { "$it. Offline voice is unavailable" }
-                    ?: "Offline voice is unavailable",
-                null,
-            )
+        whenOfflineReady(
+            onUnavailable = {
+                state = PlaybackState.Idle
+                listener?.onError(
+                    reportedFallback?.let { "$it. Offline voice is unavailable" }
+                        ?: "Offline voice is unavailable",
+                    null,
+                )
+            },
+            action = { startOfflineUtterance(text, fromChar, reportedFallback) },
+        )
+    }
+
+    /**
+     * Run [action] once the offline engine can speak, waiting at most
+     * [offlineReadyTimeoutMs] for it; run [onUnavailable] when it never can.
+     *
+     * The wait runs off the main thread and is bounded: blocking the main thread
+     * to wait would risk an ANR, which is worse than the failure it avoids.
+     */
+    private fun whenOfflineReady(onUnavailable: () -> Unit, action: () -> Unit) {
+        if (offline.isReady()) {
+            action()
             return
         }
+
+        val myGeneration = generation
+        scope.launch {
+            val ready = offline.awaitReady(offlineReadyTimeoutMs)
+            withContext(mainDispatcher) {
+                // A newer speak()/stop() superseded this request while we waited.
+                if (myGeneration != generation) return@withContext
+                if (ready) action() else onUnavailable()
+            }
+        }
+    }
+
+    private fun startOfflineUtterance(text: String, fromChar: Int, reportedFallback: String?) {
 
         state = PlaybackState.Offline(text = text, charOffset = fromChar, paused = false)
         acceptingProgress = true
@@ -401,19 +455,21 @@ class TtsEngine(
     private fun reportFallback(text: String, reason: String) {
         Log.w(TAG, "online synthesis failed ($reason); falling back to offline voice")
 
-        if (!offline.isReady()) {
-            // There is nothing to fall back to, so do not report one: claiming a
-            // fallback that cannot happen would misstate what the user is hearing.
-            state = PlaybackState.Idle
-            listener?.onError("$reason. Offline voice is unavailable", null)
-            return
-        }
-
-        // Report the degradation even though speech continues: the user asked for
-        // the neural voice and is about to hear the platform one, so a silent
-        // substitution would misrepresent what is being spoken.
-        listener?.onError(reason, TtsEngineKind.OFFLINE)
-        speakOffline(text, fromChar = 0, reportedFallback = null)
+        whenOfflineReady(
+            onUnavailable = {
+                // There is nothing to fall back to, so do not report one: claiming a
+                // fallback that cannot happen would misstate what the user hears.
+                state = PlaybackState.Idle
+                listener?.onError("$reason. Offline voice is unavailable", null)
+            },
+            action = {
+                // Report the degradation even though speech continues: the user asked
+                // for the neural voice and is about to hear the platform one, so a
+                // silent substitution would misrepresent what is being spoken.
+                listener?.onError(reason, TtsEngineKind.OFFLINE)
+                startOfflineUtterance(text, fromChar = 0, reportedFallback = null)
+            },
+        )
     }
 
     private fun onPlaybackError(msg: String) {
@@ -434,5 +490,16 @@ class TtsEngine(
         val file = File(cacheDir, "sonata_${UUID.randomUUID()}.mp3")
         file.writeBytes(bytes)
         return file
+    }
+
+    companion object {
+        /**
+         * Production wait for the platform speech engine to initialise.
+         *
+         * Generous relative to the sub-second cold start seen on hardware: the cost
+         * of waiting too long is a brief silence, while the cost of giving up too
+         * early is no speech at all.
+         */
+        const val DEFAULT_OFFLINE_READY_TIMEOUT_MS: Long = 10_000
     }
 }

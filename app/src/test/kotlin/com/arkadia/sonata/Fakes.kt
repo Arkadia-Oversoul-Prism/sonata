@@ -2,6 +2,8 @@ package com.arkadia.sonata
 
 import java.io.File
 import java.util.concurrent.CopyOnWriteArrayList
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.withTimeoutOrNull
 
 /**
  * Test doubles for the engine's seams.
@@ -128,11 +130,44 @@ class FakeOfflineVoice(var ready: Boolean = true) : OfflineVoice {
     var stopCalls = 0
         private set
 
+    /** Set when a caller is suspended in [awaitReady], so a test can release it. */
+    @Volatile
+    private var readinessGate: CompletableDeferred<Boolean>? = null
+
+    /** How many times a caller actually had to wait. */
+    var awaitReadyCalls = 0
+        private set
+
     private var onRange: ((Int) -> Unit)? = null
     private var onDone: (() -> Unit)? = null
     private var onError: ((String) -> Unit)? = null
 
     override fun isReady(): Boolean = ready
+
+    /**
+     * Suspends until readiness arrives or [timeoutMs] elapses.
+     *
+     * The bound is modelled with virtual time rather than a wall clock, so the
+     * test scheduler decides when the wait expires instead of the machine's speed.
+     */
+    override suspend fun awaitReady(timeoutMs: Long): Boolean {
+        if (ready) return true
+        awaitReadyCalls++
+        val gate = CompletableDeferred<Boolean>()
+        readinessGate = gate
+        return withTimeoutOrNull(timeoutMs) { gate.await() } ?: false
+    }
+
+    /** Simulate the platform engine completing initialisation successfully. */
+    fun becomeReady() {
+        ready = true
+        readinessGate?.complete(true)
+    }
+
+    /** Simulate the platform engine failing to initialise within the bound. */
+    fun denyReadiness() {
+        readinessGate?.complete(false)
+    }
 
     override fun speak(
         text: String,

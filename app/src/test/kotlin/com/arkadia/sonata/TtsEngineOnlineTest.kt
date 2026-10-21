@@ -4,6 +4,7 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -34,6 +35,7 @@ class TtsEngineOnlineTest {
         val offline: FakeOfflineVoice,
         val listener: RecordingListener,
         val settings: FakeSettings,
+        val cacheDir: java.io.File,
     )
 
     /**
@@ -55,9 +57,10 @@ class TtsEngineOnlineTest {
         val offline = FakeOfflineVoice(ready = offlineReady)
         val listener = RecordingListener()
         val settings = FakeSettings(backendUrl = backendUrl, preferOnline = preferOnline)
+        val cacheDir = temp.newFolder("cache")
         val engine = TtsEngine(
             settings = settings,
-            cacheDir = temp.newFolder("cache"),
+            cacheDir = cacheDir,
             transport = transport,
             player = player,
             offline = offline,
@@ -68,7 +71,7 @@ class TtsEngineOnlineTest {
             mainDispatcher = StandardTestDispatcher(scope.testScheduler),
         )
         engine.listener = listener
-        return Harness(engine, transport, player, offline, listener, settings)
+        return Harness(engine, transport, player, offline, listener, settings, cacheDir)
     }
 
     // ── Success path ──────────────────────────────────────────────────────────
@@ -285,6 +288,33 @@ class TtsEngineOnlineTest {
 
         assertFalse("the superseded request's file must be deleted", first.exists())
         assertEquals(2, h.player.playCalls)
+    }
+
+    @Test
+    fun `cancelling while the staged file is being handed off does not orphan it`() = runTest {
+        val h = harness(this)
+
+        h.engine.speak("First")
+        // Drive the request only as far as the main-dispatcher hop, so a
+        // cancellation can land in the window where the file has been written but
+        // playback has not started.
+        runCurrent()
+        h.engine.stop()
+        advanceUntilIdle()
+
+        val leaked = h.cacheDir.listFiles()?.toList().orEmpty()
+        assertTrue("staged files leaked: ${leaked.map { it.name }}", leaked.isEmpty())
+    }
+
+    @Test
+    fun `rapid requests do not accumulate staged files`() = runTest {
+        val h = harness(this)
+
+        repeat(5) { h.engine.speak("Request number " + it) }
+        advanceUntilIdle()
+
+        val leaked = h.cacheDir.listFiles()?.toList().orEmpty()
+        assertTrue("staged files leaked: ${leaked.map { it.name }}", leaked.isEmpty())
     }
 
     @Test
