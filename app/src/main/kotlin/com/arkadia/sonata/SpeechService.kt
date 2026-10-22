@@ -268,14 +268,31 @@ class SpeechService : Service() {
                 .build()
         )
 
-        val preview = currentText.take(80) + if (currentText.length > 80) "…" else ""
+        val preview = currentText.replace(Regex("\\s+"), " ").trim().let {
+            if (it.length <= 72) it else it.take(72) + "…"
+        }
         val engineNote = when (currentEngine) {
             TtsEngineKind.ONLINE  -> "Neural voice"
             TtsEngineKind.OFFLINE -> if (fellBackOffline) "Offline voice (backend unavailable)"
                                      else "Offline voice"
             null                  -> null
         }
-        val body = listOfNotNull(preview.ifBlank { null }, engineNote).joinToString(" · ")
+        // The position is worth showing: a long read is the normal case now, and
+        // "how far in am I?" is the question the shade is opened to answer.
+        val positionNote = if (tts.isBufferingNext) {
+            "Buffering…"
+        } else {
+            val total = tts.totalChars
+            if (total > 0 && tts.isPlaying) {
+                val percent = ((tts.spokenChars.toFloat() / total) * 100).toInt().coerceIn(0, 100)
+                if (tts.segmentCount > 1) "Part ${tts.segmentIndex} of ${tts.segmentCount} · $percent%"
+                else "$percent%"
+            } else {
+                null
+            }
+        }
+        val body = listOfNotNull(preview.ifBlank { null }, positionNote, engineNote)
+            .joinToString(" · ")
 
         return NotificationCompat.Builder(this, SonataApp.CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_sonata)
