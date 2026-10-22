@@ -2,108 +2,54 @@ package com.arkadia.sonata
 
 import android.app.Activity
 import android.content.Intent
-import android.net.Uri
 import android.os.Bundle
-import android.provider.Settings
 import android.widget.Toast
 
 /**
- * Handles android.intent.action.PROCESS_TEXT — appears as
- * "Speak with Sonata" in the native text-selection pop-up across all apps.
+ * Receives text from Android's text-selection menu and hands it to the one screen.
  *
- * No UI is shown (transparent theme). The activity starts SpeechService
- * (foreground) and optionally FloatingOverlayService, then finishes.
+ * This activity has no UI. It previously opened a separate player, which is how the
+ * app ended up with two screens and a blank-looking handover: the player showed only
+ * a preview and the real text sat in a service the user could not see. Forwarding to
+ * [MainActivity] means the selection lands in the input the user would have typed
+ * into, with the read starting there.
  *
- * The activity is `noHistory`, but a re-delivery while an instance is alive
- * arrives through [onNewIntent]; both entry points share [handle] so a second
- * selection does not depend on a fresh activity.
+ * `noHistory` is deliberately not set: a second selection while an instance is alive
+ * arrives through [onNewIntent], and both entry points forward the same way.
  */
 class ProcessTextActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        handle(intent)
+        forward(intent)
     }
 
     override fun onNewIntent(intent: Intent?) {
         super.onNewIntent(intent)
         setIntent(intent)
-        handle(intent)
+        forward(intent)
     }
 
-    private fun handle(intent: Intent?) {
-        // Some apps send the read-only variant; accept either.
+    private fun forward(intent: Intent?) {
+        // Some apps send the read-only variant; accept either, plus a plain share.
         val raw = intent?.getCharSequenceExtra(Intent.EXTRA_PROCESS_TEXT)
             ?: intent?.getCharSequenceExtra(Intent.EXTRA_PROCESS_TEXT_READONLY)
+            ?: intent?.getCharSequenceExtra(Intent.EXTRA_TEXT)
 
-        when (val validation = TextLimits.validate(raw)) {
-            is TextValidation.Empty -> {
-                // Nothing to read: do not start a foreground service for it.
-                finish()
-                return
-            }
-
-            is TextValidation.Ready -> dispatch(validation.text)
-
-            is TextValidation.Truncated -> {
-                Toast.makeText(
-                    this,
-                    "Reading the first $MAX_TTS_CHARS characters",
-                    Toast.LENGTH_SHORT
-                ).show()
-                dispatch(validation.text)
-            }
+        val text = raw?.toString()?.trim().orEmpty()
+        if (text.isEmpty()) {
+            // Nothing to read: say so rather than opening an empty screen.
+            Toast.makeText(this, "No text selected", Toast.LENGTH_SHORT).show()
+            finish()
+            return
         }
 
-        finish()
-    }
-
-    private fun dispatch(text: String) {
-        val speechIntent = Intent(this, SpeechService::class.java).apply {
-            action = SpeechService.ACTION_SPEAK
-            putExtra(SpeechService.EXTRA_TEXT,  text)
-            putExtra(SpeechService.EXTRA_LABEL, "SONATA")
-        }
-        startForegroundService(speechIntent)
-
-        // Show the player. Previously this activity started the service and
-        // finished, so selecting "Sonata" produced no on-screen response at all:
-        // the user could not tell whether anything had happened, nor stop it.
         startActivity(
-            Intent(this, PlayerActivity::class.java).apply {
-                putExtra(PlayerActivity.EXTRA_PREVIEW, text.take(PREVIEW_CHARS))
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            Intent(this, MainActivity::class.java).apply {
+                putExtra(Intent.EXTRA_PROCESS_TEXT, text)
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
             }
         )
-
-        // Show the floating overlay if permitted; otherwise point at the setting.
-        if (Settings.canDrawOverlays(this)) {
-            val overlayIntent = Intent(this, FloatingOverlayService::class.java).apply {
-                putExtra(FloatingOverlayService.EXTRA_LABEL,   "ORACLE TRANSMISSION")
-                putExtra(FloatingOverlayService.EXTRA_PREVIEW, text)
-            }
-            startService(overlayIntent)
-        } else {
-            Toast.makeText(
-                this,
-                "Grant 'Display over other apps' in Settings for the floating player.",
-                Toast.LENGTH_LONG
-            ).show()
-            requestOverlayPermission()
-        }
-    }
-
-    private companion object {
-        /** Characters of the selection shown in the player; the read uses all of it. */
-        const val PREVIEW_CHARS = 600
-    }
-
-    private fun requestOverlayPermission() {
-        val intent = Intent(
-            Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-            Uri.parse("package:$packageName")
-        )
-        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        startActivity(intent)
+        finish()
     }
 }

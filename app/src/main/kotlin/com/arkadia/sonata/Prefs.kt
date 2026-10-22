@@ -39,12 +39,13 @@ class Prefs(context: Context) : TtsSettings {
         set(v) = sp.edit().putBoolean(KEY_DARK_MODE, v).apply()
 
     /**
-     * Base URL of the Arkadia Oracle Temple backend.
-     * When set + device is online, the app calls /api/tts for neural audio.
-     * Leave empty to always use offline Android TTS.
+     * Base URL of the Arkadia voice gateway. Defaults to [BackendConfig.DEFAULT_URL]
+     * so the neural voice works on install — the user is not asked for a URL. An
+     * empty value forces the offline device voice, which is the deliberate way to
+     * opt out.
      */
     var edgeTtsUrl: String
-        get() = sp.getString(KEY_EDGE_TTS_URL, "") ?: ""
+        get() = sp.getString(KEY_EDGE_TTS_URL, BackendConfig.DEFAULT_URL) ?: BackendConfig.DEFAULT_URL
         set(v) = sp.edit().putString(KEY_EDGE_TTS_URL, v).apply()
 
     /** Prefer Edge TTS (online) when URL is configured */

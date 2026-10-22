@@ -13,19 +13,27 @@ import android.view.View
 import android.view.WindowManager
 import android.widget.ImageButton
 import android.widget.TextView
+import com.arkadia.sonata.databinding.OverlayBubbleBinding
 import com.arkadia.sonata.databinding.OverlayPlayerBinding
 
 /**
- * Minimal draggable glass overlay for playback control.
- * Black glass aesthetic, always on top, draggable.
+ * The floating player: a draggable glass panel that collapses to a small bubble so
+ * a read continues while the user works in other apps.
  *
- * Lifecycle: started by ProcessTextActivity → SpeechService bound internally.
+ * Two views share one window slot. Collapsing swaps the panel for a bubble and keeps
+ * the position, so the player stays where the user put it; expanding restores the
+ * panel. Both states are draggable, and both drive the same bound [SpeechService] as
+ * the main screen and the notification.
  */
 class FloatingOverlayService : Service() {
 
     private lateinit var wm: WindowManager
     private lateinit var binding: OverlayPlayerBinding
+    private lateinit var bubble: OverlayBubbleBinding
     private var overlayView: View? = null
+
+    /** Which view is currently attached to the window. */
+    private var collapsed = false
 
     private var speechService: SpeechService? = null
     private val conn = object : ServiceConnection {
@@ -60,12 +68,16 @@ class FloatingOverlayService : Service() {
         super.onCreate()
         wm = getSystemService(WindowManager::class.java)
 
-        binding = OverlayPlayerBinding.inflate(LayoutInflater.from(this))
-        overlayView = binding.root
+        val inflater = LayoutInflater.from(this)
+        binding = OverlayPlayerBinding.inflate(inflater)
+        bubble = OverlayBubbleBinding.inflate(inflater)
 
-        setupDrag()
+        setupDrag(binding.root)
+        setupDrag(bubble.root)
         setupButtons()
+        setupBubble()
 
+        overlayView = binding.root
         wm.addView(overlayView, params)
 
         // Bind to SpeechService
@@ -90,22 +102,63 @@ class FloatingOverlayService : Service() {
         super.onDestroy()
     }
 
+    // ── Collapse / expand ─────────────────────────────────────────────────
+
+    /**
+     * Swap the attached view, carrying the position across so the player does not
+     * jump when it is collapsed or reopened.
+     */
+    private fun setCollapsed(collapse: Boolean) {
+        if (collapsed == collapse) return
+        val current = overlayView ?: return
+        val next: View = if (collapse) bubble.root else binding.root
+
+        wm.removeView(current)
+        overlayView = next
+        collapsed = collapse
+        if (collapse) updateBubble() else updatePlayPause()
+        wm.addView(next, params)
+    }
+
+    private fun setupBubble() {
+        // A tap expands; a drag moves. Distinguishing them needs the touch distance,
+        // which setupDrag records, so the tap is only acted on when the pointer
+        // barely moved.
+        bubble.root.setOnClickListener {
+            if (!dragged) setCollapsed(false)
+        }
+    }
+
+    /** The bubble reflects playing state so a glance is enough. */
+    private fun updateBubble() {
+        bubble.ivBubble.alpha = if (speechService?.isPlaying == true) 1.0f else 0.55f
+    }
+
     // ── Drag ──────────────────────────────────────────────────────────────
 
     private var initX = 0; private var initY = 0
     private var initTouchX = 0f; private var initTouchY = 0f
 
-    private fun setupDrag() {
-        binding.root.setOnTouchListener { _, event ->
+    /** Set when the pointer travelled far enough that this was a drag, not a tap. */
+    private var dragged = false
+
+    private fun setupDrag(view: View) {
+        view.setOnTouchListener { _, event ->
             when (event.action) {
                 MotionEvent.ACTION_DOWN -> {
                     initX = params.x; initY = params.y
                     initTouchX = event.rawX; initTouchY = event.rawY
+                    dragged = false
                     true
                 }
                 MotionEvent.ACTION_MOVE -> {
-                    params.x = initX + (event.rawX - initTouchX).toInt()
-                    params.y = initY + (event.rawY - initTouchY).toInt()
+                    val dx = event.rawX - initTouchX
+                    val dy = event.rawY - initTouchY
+                    if (kotlin.math.abs(dx) > TAP_SLOP || kotlin.math.abs(dy) > TAP_SLOP) {
+                        dragged = true
+                    }
+                    params.x = initX + dx.toInt()
+                    params.y = initY + dy.toInt()
                     wm.updateViewLayout(overlayView, params)
                     true
                 }
@@ -129,6 +182,7 @@ class FloatingOverlayService : Service() {
             stopSelf()
         }
         binding.btnClose.setOnClickListener { stopSelf() }
+        binding.btnCollapse.setOnClickListener { setCollapsed(true) }
 
         binding.btnSpeed.setOnClickListener {
             val prefs = Prefs(this)
@@ -144,10 +198,14 @@ class FloatingOverlayService : Service() {
             if (playing) android.R.drawable.ic_media_pause
             else         android.R.drawable.ic_media_play
         )
+        updateBubble()
     }
 
     companion object {
         const val EXTRA_LABEL   = "label"
         const val EXTRA_PREVIEW = "preview"
+
+        /** Touch travel, in px, above which a gesture is a drag rather than a tap. */
+        private const val TAP_SLOP = 12f
     }
 }
