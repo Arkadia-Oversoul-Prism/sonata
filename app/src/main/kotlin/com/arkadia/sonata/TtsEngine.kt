@@ -580,7 +580,10 @@ class TtsEngine(
 
         // The remaining text is the failing piece and everything after it: the
         // pieces partition the passage, so this is exactly what has not been read.
-        val remaining = segments.getOrNull(fromIndex)?.text ?: fullText
+        // Joining the tail matters — taking only the failing piece would speak one
+        // request's worth and silently drop the rest of the passage.
+        val remaining = segments.drop(fromIndex).joinToString("") { it.text }
+            .ifBlank { fullText }
 
         fetchJobs.values.forEach { it.cancel() }
         fetchJobs.clear()

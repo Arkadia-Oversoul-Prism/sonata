@@ -561,6 +561,123 @@ class TtsEngineOnlineTest {
         assertEquals("Nothing to resume", h.listener.failures[0].msg)
     }
 
+    // ── Progressive read: progress, buffering and mid-passage fallback ─────────
+
+    @Test
+    fun `progress reports the whole passage and the piece being played`() = runTest {
+        val h = harness(this, prefetchDepth = 0)
+        val long = buildString { repeat(2000) { append("word$it ") } }
+        h.engine.speak(long)
+        advanceUntilIdle()
+
+        // The denominator is the passage the user offered, not the piece being
+        // spoken: a progress read against a 900-character piece would always look
+        // almost finished.
+        assertEquals(long.trim().length, h.engine.totalChars)
+        assertTrue("a long passage must be split", h.engine.segmentCount > 1)
+        assertEquals("the first piece is piece 1", 1, h.engine.segmentIndex)
+        assertEquals("nothing has been spoken past the first piece", 0, h.engine.spokenChars)
+    }
+
+    @Test
+    fun `a paused read does not advance to the next piece`() = runTest {
+        val h = harness(this, prefetchDepth = 0)
+        val long = buildString { repeat(2000) { append("word$it ") } }
+        h.engine.speak(long)
+        advanceUntilIdle()
+
+        h.engine.pause()
+        val playsAtPause = h.player.playCalls
+
+        // The first piece ends while paused; the engine must not roll on to the
+        // second, or pausing would be indistinguishable from a no-op.
+        h.player.complete()
+        advanceUntilIdle()
+
+        assertEquals("a paused read must not start another piece", playsAtPause, h.player.playCalls)
+        assertTrue(h.engine.isPaused)
+    }
+
+    @Test
+    fun `resuming a read paused between pieces continues it`() = runTest {
+        val h = harness(this, prefetchDepth = 0)
+        val long = buildString { repeat(2000) { append("word$it ") } }
+        h.engine.speak(long)
+        advanceUntilIdle()
+
+        // Reach the gap between pieces: the first has ended and the next is not
+        // staged yet.
+        h.engine.pause()
+        h.player.complete()
+        advanceUntilIdle()
+        assertTrue("expected the read to be paused", h.engine.isPaused)
+
+        h.engine.resume()
+        advanceUntilIdle()
+
+        assertFalse(h.engine.isPaused)
+        assertTrue("resuming must actually play the next piece", h.player.playCalls >= 2)
+    }
+
+    @Test
+    fun `a failure on a later piece falls back with the unread remainder, not the whole passage`() = runTest {
+        // The first piece succeeds; the second fails. The fallback must speak what
+        // has not been read — re-reading the passage from the top would repeat
+        // audio the user already heard, and speaking nothing would lose the rest.
+        val long = buildString { repeat(2000) { append("word$it ") } }
+        val transport = FakeTransport(
+            sequence = listOf(
+                SynthesisResult.Success(ByteArray(64) { 1 }, "audio/mpeg", "edge_tts"),
+                SynthesisResult.Failure("Backend returned HTTP 502"),
+            ),
+        )
+        val player = FakeAudioPlayer()
+        val offline = FakeOfflineVoice()
+        val listener = RecordingListener()
+        val engine = TtsEngine(
+            settings = FakeSettings(backendUrl = "https://example.test", preferOnline = true),
+            cacheDir = temp.newFolder("fallback-cache"),
+            transport = transport,
+            player = player,
+            offline = offline,
+            scope = this,
+            mainDispatcher = StandardTestDispatcher(testScheduler),
+            prefetchDepth = 0,
+        )
+        engine.listener = listener
+
+        engine.speak(long)
+        advanceUntilIdle()
+        val firstPiece = transport.requests.first().first
+        assertTrue("the first piece must have been spoken", player.playCalls == 1)
+
+        // Let the first piece finish so the read reaches the failing second piece.
+        player.complete()
+        advanceUntilIdle()
+
+        assertEquals(1, offline.utterances.size)
+        val spoken = offline.utterances[0].text
+        assertTrue("the fallback must not be empty", spoken.isNotBlank())
+        assertTrue(
+            "the fallback must not re-read the passage from the top",
+            !spoken.startsWith(firstPiece),
+        )
+        // And it must be the remainder, so nothing is lost.
+        assertTrue("the remainder must be spoken", long.trim().endsWith(spoken))
+    }
+
+    @Test
+    fun `the start is reported once for a whole segmented read`() = runTest {
+        // A read is one utterance to the user. Reporting a start per piece would
+        // make the UI flicker and the notification re-post on every piece.
+        val h = harness(this, prefetchDepth = 0)
+        val long = buildString { repeat(2000) { append("word$it ") } }
+        h.engine.speak(long)
+        playThrough(h)
+
+        assertEquals(1, h.listener.starts.size)
+    }
+
     // ── Engine selection ──────────────────────────────────────────────────────
 
     @Test
