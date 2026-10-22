@@ -55,8 +55,25 @@ fail with `INSTALL_PARSE_FAILED_NO_CERTIFICATES`.
 
 | Artifact | Signed | Installable | sha256 |
 |---|---|---|---|
-| `app-release-unsigned.apk` (what CI uploads) | **no** | **no** | `7f5ab696…` |
-| `app-debug.apk` (local build) | yes, Android Debug key | **yes** | `b4d9cf8b…` |
+| `app-release-unsigned.apk` | **no** | **no** | `7f5ab696…` (reproducible) |
+| `app-debug.apk` | yes, Android Debug key | **yes** | **not reproducible — see below** |
+
+**The debug APK's hash is not stable across machines, and this corrects an earlier
+claim.** The CI-built debug APK and the locally built one have *different* sha256
+values (`d1856545…` vs `b4d9cf8b…`) because each machine signs with its own
+generated debug keystore:
+
+| Build | Debug certificate SHA-256 |
+|---|---|
+| GitHub runner | `1ac97a80…` |
+| this sandbox | `b77ec912…` |
+
+So the *unsigned release* APK is the byte-reproducible artifact, and the *signed
+debug* APK is not. This does not weaken the release-artifact identity argument in
+`E2-SLICE-02-EVIDENCE.md` — that argument was made only about the unsigned release
+APK, and it still holds. It does mean a debug APK's hash **cannot** be used to prove
+which revision produced it; use the certificate and the artifact's own name (which
+embeds the SHA) for that instead.
 
 **Use the debug APK for device testing.** Build it from the candidate revision:
 
