@@ -1,13 +1,19 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- Arkadia palette -->
+    <!-- Arkadia palette.
+         Semantic names rather than appearance names, so a surface can be retinted
+         without hunting for every literal that happened to share its value. -->
     <color name="bg_dark">#0C0C14</color>
     <color name="bg_card">#12121E</color>
+    <color name="bg_raised">#171728</color>
     <color name="overlay_bg">#E0101020</color>
     <color name="overlay_border">#33FFFFFF</color>
+    <color name="hairline">#23233A</color>
 
     <color name="accent_teal">#00D4AA</color>
+    <color name="accent_teal_dim">#0A6B58</color>
     <color name="accent_warm">#C9A84C</color>
+    <color name="accent_danger">#E5645C</color>
 
     <color name="text_primary">#E8E8E8</color>
     <color name="text_secondary">#99A0B0</color>
@@ -16,4 +22,5 @@
     <!-- System -->
     <color name="black">#FF000000</color>
     <color name="white">#FFFFFFFF</color>
+    <color name="transparent">#00000000</color>
 </resources>

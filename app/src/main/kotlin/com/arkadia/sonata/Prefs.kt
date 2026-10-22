@@ -53,6 +53,17 @@ class Prefs(context: Context) : TtsSettings {
         get() = sp.getBoolean(KEY_PREFER_EDGE, true)
         set(v) = sp.edit().putBoolean(KEY_PREFER_EDGE, v).apply()
 
+    /**
+     * The passage the user was last reading.
+     *
+     * Kept because a read-aloud app is used in bursts: the user leaves to do
+     * something else and comes back. Starting from an empty field every time would
+     * make that unusable, so the text survives unless the user clears it.
+     */
+    var lastPassage: String
+        get() = sp.getString(KEY_LAST_PASSAGE, "").orEmpty()
+        set(v) = sp.edit().putString(KEY_LAST_PASSAGE, v).apply()
+
     // ── TtsSettings ────────────────────────────────────────────────────────
     // The engine reads through these narrow names; the stored keys above keep
     // their original names so existing installs keep their preferences.
@@ -69,5 +80,6 @@ class Prefs(context: Context) : TtsSettings {
         private const val KEY_DARK_MODE     = "dark_mode"
         private const val KEY_EDGE_TTS_URL  = "edge_tts_url"
         private const val KEY_PREFER_EDGE   = "prefer_edge_tts"
+        private const val KEY_LAST_PASSAGE  = "last_passage"
     }
 }

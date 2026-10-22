@@ -2,15 +2,21 @@ package com.arkadia.sonata
 
 import android.Manifest
 import android.content.ComponentName
+import android.content.ClipboardManager
+import android.content.Context
 import android.content.Intent
 import android.content.ServiceConnection
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
 import android.os.IBinder
+import android.os.Looper
 import android.provider.Settings
 import android.view.View
+import android.view.inputmethod.InputMethodManager
+import android.widget.AdapterView
 import android.widget.ArrayAdapter
 import android.widget.SeekBar
 import android.widget.Toast
@@ -22,11 +28,16 @@ import com.arkadia.sonata.databinding.ActivityMainBinding
 /**
  * The whole application, on one screen.
  *
- * Text in, speech out. Voice and speed are one quiet row; everything optional is
- * behind [binding.panelMore] rather than a second activity, because the previous
- * split between a main screen and a settings screen asked the user to configure a
- * backend URL before the neural voice would work — configuration the app can carry
- * itself ([BackendConfig]).
+ * Text in, speech out. The screen is organised around the five questions a
+ * listening user has — what am I reading, what is happening, how do I control it,
+ * which voice is this, how do I keep listening while I do something else — rather
+ * than around the app's internal structure. Voice, speed and the rest are one
+ * quiet row or behind More; there is no second screen, because the previous split
+ * asked the user to configure a backend URL before the neural voice would work,
+ * and configuration the app can carry itself ([BackendConfig]) is not a setting.
+ *
+ * The mini-player is the in-app half of the floating player: once a read is under
+ * way, playback controls stay reachable instead of scrolling out of view.
  */
 class MainActivity : AppCompatActivity() {
 
@@ -36,23 +47,39 @@ class MainActivity : AppCompatActivity() {
     private var speechService: SpeechService? = null
     private var bound = false
 
+    /** Drives the progress read while a segmented read is playing. */
+    private val ticker = Handler(Looper.getMainLooper())
+    private var tickerRunning = false
+
     private val conn = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName, binder: IBinder) {
             speechService = (binder as SpeechService.LocalBinder).getService()
             bound = true
-            speechService?.onStart    = { render() }
-            speechService?.onPause    = { render() }
-            speechService?.onResume   = { render() }
-            speechService?.onComplete = { render() }
-            speechService?.onError    = { msg -> showError(msg) }
+            speechService?.addClient(uiClient)
             render()
         }
 
         override fun onServiceDisconnected(name: ComponentName) {
+            speechService?.removeClient(uiClient)
             speechService = null
             bound = false
             render()
         }
+    }
+
+    /**
+     * The screen's interest in playback lifecycle.
+     *
+     * A client object rather than the single callback slots the service used to
+     * expose: the floating player is bound at the same time, and shared slots meant
+     * whichever bound last took the events from the other.
+     */
+    private val uiClient = object : SpeechService.Client {
+        override fun onStart() { render(); startTicker() }
+        override fun onPause() { render() }
+        override fun onResume() { render(); startTicker() }
+        override fun onComplete() { stopTicker(); render() }
+        override fun onError(msg: String) { showNotice(msg); render() }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -65,8 +92,10 @@ class MainActivity : AppCompatActivity() {
         setupSpeed()
         setupPitch()
         setupActions()
-        refreshCacheLabel()
+        setupPassageField()
+        refreshStorageLabel()
         requestNotificationPermissionIfNeeded()
+        restoreLastPassage()
         consumeIncomingText(intent)
     }
 
@@ -89,10 +118,29 @@ class MainActivity : AppCompatActivity() {
         if (text.isEmpty()) return
 
         binding.etText.setText(text)
+        renderWordCount()
         if (prefs.autoRead) read()
     }
 
-    // ── Controls ──────────────────────────────────────────────────────────
+    /**
+     * Restore the passage the user was last reading.
+     *
+     * A read-aloud app is used in bursts — the user leaves to do something else and
+     * comes back. Losing the text on every launch would make that unusable, so the
+     * last passage is kept unless the user cleared it.
+     */
+    private fun restoreLastPassage() {
+        if (binding.etText.text?.isNotBlank() == true) return
+        val last = prefs.lastPassage
+        if (last.isNotBlank()) binding.etText.setText(last)
+        renderWordCount()
+    }
+
+    private fun rememberPassage() {
+        prefs.lastPassage = binding.etText.text?.toString().orEmpty()
+    }
+
+    // ── Controls ──────────────────────────────────────────────────────────────
 
     private fun setupVoice() {
         val adapter = ArrayAdapter(
@@ -103,84 +151,177 @@ class MainActivity : AppCompatActivity() {
         adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
         binding.spinnerVoice.adapter = adapter
         binding.spinnerVoice.setSelection(BackendConfig.indexOf(prefs.voice))
-        binding.spinnerVoice.onItemSelectedListener =
-            object : android.widget.AdapterView.OnItemSelectedListener {
-                override fun onItemSelected(p: android.widget.AdapterView<*>, v: View?, pos: Int, id: Long) {
-                    prefs.voice = BackendConfig.VOICES[pos].id
-                }
-                override fun onNothingSelected(p: android.widget.AdapterView<*>) {}
+        binding.spinnerVoice.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
+            override fun onItemSelected(p: AdapterView<*>, v: View?, pos: Int, id: Long) {
+                prefs.voice = BackendConfig.VOICES[pos].id
+                renderVoiceBadge()
             }
+
+            override fun onNothingSelected(p: AdapterView<*>) {}
+        }
+        renderVoiceBadge()
+    }
+
+    /** The voice is worth naming once, quietly, so the user knows what they hear. */
+    private fun renderVoiceBadge() {
+        val voice = BackendConfig.VOICES[BackendConfig.indexOf(prefs.voice)]
+        binding.tvVoiceBadge.text = voice.name
     }
 
     private fun setupSpeed() {
         binding.seekSpeed.max = SpeedSteps.SPEEDS.size - 1
         binding.seekSpeed.progress = SpeedSteps.indexOf(prefs.speed)
-        showSpeed(prefs.speed)
+        renderSpeed(prefs.speed)
         binding.seekSpeed.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(sb: SeekBar, progress: Int, fromUser: Boolean) {
+                if (!fromUser) return
                 val s = SpeedSteps.SPEEDS[progress]
                 prefs.speed = s
-                showSpeed(s)
+                renderSpeed(s)
             }
+
             override fun onStartTrackingTouch(sb: SeekBar) {}
             override fun onStopTrackingTouch(sb: SeekBar) {}
         })
 
-        // The compact label on the main screen steps the speed without opening More.
-        binding.tvSpeed.setOnClickListener {
+        // The chip steps the speed without opening More: the most common
+        // adjustment, one tap away.
+        binding.btnSpeed.setOnClickListener {
             val next = SpeedSteps.next(prefs.speed)
             prefs.speed = next
             binding.seekSpeed.progress = SpeedSteps.indexOf(next)
-            showSpeed(next)
+            renderSpeed(next)
         }
     }
 
-    private fun showSpeed(speed: Float) {
-        binding.tvSpeed.text = "$speed×"
-        binding.tvSpeedValue.text = "$speed× — tap the label on the main screen to step"
+    private fun renderSpeed(speed: Float) {
+        binding.btnSpeed.text = "${speed}×"
+        binding.tvSpeedValue.text = "${speed}× — tap the chip on the main screen to step"
     }
 
     private fun setupPitch() {
         binding.seekPitch.max = 20
         binding.seekPitch.progress = ((prefs.pitch - 0.5f) * 20f / 1.5f).toInt().coerceIn(0, 20)
-        showPitch(prefs.pitch)
+        renderPitch(prefs.pitch)
         binding.seekPitch.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(sb: SeekBar, progress: Int, fromUser: Boolean) {
+                if (!fromUser) return
                 val p = 0.5f + progress * 1.5f / 20f
                 prefs.pitch = p
-                showPitch(p)
+                renderPitch(p)
             }
+
             override fun onStartTrackingTouch(sb: SeekBar) {}
             override fun onStopTrackingTouch(sb: SeekBar) {}
         })
     }
 
-    private fun showPitch(pitch: Float) {
+    private fun renderPitch(pitch: Float) {
         binding.tvPitchValue.text = String.format("%.2f×", pitch)
+    }
+
+    private fun setupPassageField() {
+        binding.etText.addTextChangedListener(
+            object : android.text.TextWatcher {
+                override fun beforeTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
+                override fun onTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
+                override fun afterTextChanged(s: android.text.Editable?) {
+                    renderWordCount()
+                }
+            },
+        )
+        renderWordCount()
+    }
+
+    /**
+     * A count the user can act on. Characters matter for the read; words and the
+     * approximate listening time matter for deciding whether to start it.
+     */
+    private fun renderWordCount() {
+        val text = binding.etText.text?.toString().orEmpty().trim()
+        if (text.isEmpty()) {
+            binding.tvWordCount.text = ""
+            binding.btnClear.visibility = View.GONE
+            return
+        }
+        binding.btnClear.visibility = View.VISIBLE
+
+        val words = text.split(Regex("\\s+")).count { it.isNotBlank() }
+        val minutes = words / WORDS_PER_MINUTE
+        val duration = when {
+            minutes < 1 -> "under a minute"
+            minutes == 1 -> "about a minute"
+            else -> "about $minutes minutes"
+        }
+        binding.tvWordCount.text = "$words words · $duration"
     }
 
     private fun setupActions() {
         binding.btnPlay.setOnClickListener {
             if (speechService?.isPaused == true) speechService?.resume() else read()
         }
-        binding.btnStop.setOnClickListener {
-            speechService?.stop()
+        binding.btnStop.setOnClickListener { stopRead() }
+        binding.btnMore.setOnClickListener { toggleMore() }
+        binding.miniStop.setOnClickListener { stopRead() }
+        binding.miniPlayPause.setOnClickListener { togglePause() }
+        binding.miniFloat.setOnClickListener { floatOverlay() }
+
+        binding.btnPaste.setOnClickListener { pasteFromClipboard() }
+        binding.btnClear.setOnClickListener {
+            binding.etText.setText("")
+            rememberPassage()
+            clearNotice()
             render()
         }
-        binding.btnMore.setOnClickListener {
-            val open = binding.panelMore.visibility == View.VISIBLE
-            binding.panelMore.visibility = if (open) View.GONE else View.VISIBLE
-            if (!open) refreshCacheLabel()
+    }
+
+    private fun pasteFromClipboard() {
+        val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        val clip = clipboard.primaryClip
+        val text = if (clip != null && clip.itemCount > 0) {
+            clip.getItemAt(0).coerceToText(this).toString()
+        } else {
+            ""
         }
-        binding.btnFloat.setOnClickListener { floatOverlay() }
+        if (text.isBlank()) {
+            showNotice(getString(R.string.clipboard_empty))
+            return
+        }
+        binding.etText.setText(text)
+        binding.etText.setSelection(binding.etText.text?.length ?: 0)
+        clearNotice()
+        render()
+    }
+
+    private fun toggleMore() {
+        val open = binding.panelMore.visibility == View.VISIBLE
+        binding.panelMore.visibility = if (open) View.GONE else View.VISIBLE
+        if (!open) refreshStorageLabel()
+    }
+
+    private fun togglePause() {
+        val svc = speechService ?: return
+        if (svc.isPaused) svc.resume() else svc.pause()
+        render()
+    }
+
+    private fun stopRead() {
+        speechService?.stop()
+        stopTicker()
+        render()
     }
 
     private fun read() {
         val text = binding.etText.text?.toString()
+        // Dismiss the keyboard: the user has committed to listening, and a
+        // keyboard covering half the screen is the wrong thing to leave behind.
+        (getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager)
+            ?.hideSoftInputFromWindow(binding.etText.windowToken, 0)
+
         when (val validation = TextLimits.validate(text)) {
-            is TextValidation.Empty -> showError("Nothing to read — paste or type some text")
+            is TextValidation.Empty -> showNotice(getString(R.string.empty_passage))
             is TextValidation.Truncated -> {
-                showError("Reading the first $MAX_TTS_CHARS characters")
+                showNotice("Reading the first $MAX_INPUT_CHARS characters")
                 dispatch(validation.text)
             }
             is TextValidation.Ready -> dispatch(validation.text)
@@ -188,54 +329,81 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun dispatch(text: String) {
-        clearError()
-        binding.tvState.text = "Preparing…"
-        val intent = Intent(this, SpeechService::class.java).apply {
-            action = SpeechService.ACTION_SPEAK
-            putExtra(SpeechService.EXTRA_TEXT, text)
-            putExtra(SpeechService.EXTRA_LABEL, "SONATA")
-        }
-        startForegroundService(intent)
+        clearNotice()
+        rememberPassage()
+        binding.tvState.text = getString(R.string.state_preparing)
+        binding.tvSubstate.text = "Starting the voice…"
+        startForegroundService(
+            Intent(this, SpeechService::class.java).apply {
+                action = SpeechService.ACTION_SPEAK
+                putExtra(SpeechService.EXTRA_TEXT, text)
+                putExtra(SpeechService.EXTRA_LABEL, "SONATA")
+            },
+        )
+        startTicker()
     }
 
     /**
      * Collapse to the floating player so the read continues over other apps.
      *
      * Requires the overlay permission; when it is absent the user is told where to
-     * grant it rather than the button silently doing nothing.
+     * grant it and taken there, rather than the button silently doing nothing —
+     * which is what made the founder report that the floating player "does not open
+     * or float at all".
      */
     private fun floatOverlay() {
         if (!Settings.canDrawOverlays(this)) {
-            Toast.makeText(this, "Allow 'Display over other apps' to use the floating player",
-                Toast.LENGTH_LONG).show()
+            showNotice(getString(R.string.overlay_permission_prompt))
+            Toast.makeText(
+                this,
+                "Allow 'Display over other apps' to use the floating player",
+                Toast.LENGTH_LONG,
+            ).show()
             startActivity(
-                Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName"))
+                Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName")),
             )
             return
         }
+        val preview = binding.etText.text?.toString().orEmpty()
         startService(
             Intent(this, FloatingOverlayService::class.java).apply {
                 putExtra(FloatingOverlayService.EXTRA_LABEL, "SONATA")
-                putExtra(FloatingOverlayService.EXTRA_PREVIEW, binding.etText.text?.toString().orEmpty())
-            }
+                putExtra(FloatingOverlayService.EXTRA_PREVIEW, preview)
+            },
         )
         moveTaskToBack(true)
     }
 
-    // ── Lifecycle ─────────────────────────────────────────────────────────
+    // ── Lifecycle ─────────────────────────────────────────────────────────────
 
     override fun onStart() {
         super.onStart()
         bindService(Intent(this, SpeechService::class.java), conn, BIND_AUTO_CREATE)
     }
 
+    override fun onResume() {
+        super.onResume()
+        // The overlay permission may have been granted while the app was away.
+        if (overlayDeniedNoticeShown && Settings.canDrawOverlays(this)) {
+            overlayDeniedNoticeShown = false
+            showNotice("Floating player enabled — tap Float to use it")
+        }
+        render()
+        if (speechService?.isPlaying == true || speechService?.isPaused == true) startTicker()
+    }
+
     override fun onStop() {
         super.onStop()
+        stopTicker()
+        rememberPassage()
         if (bound) {
+            speechService?.removeClient(uiClient)
             runCatching { unbindService(conn) }
             bound = false
         }
     }
+
+    private var overlayDeniedNoticeShown = false
 
     private fun requestNotificationPermissionIfNeeded() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
@@ -248,47 +416,157 @@ class MainActivity : AppCompatActivity() {
 
     private val notificationPermissionLauncher =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
-            if (!granted) Toast.makeText(
-                this, "Notifications are off — playback controls will not appear", Toast.LENGTH_LONG
-            ).show()
+            if (!granted) showNotice(
+                "Notifications are off — playback controls will not appear in the shade",
+            )
         }
 
-    // ── Rendering ─────────────────────────────────────────────────────────
+    // ── Rendering ─────────────────────────────────────────────────────────────
+
+    /**
+     * Poll the engine's real progress while a read is playing.
+     *
+     * The engine exposes characters spoken, not a percentage, because a segmented
+     * read has no single audio file to ask for a duration. The ticker is what turns
+     * that into a bar and a position, and it stops the moment nothing is playing.
+     */
+    private fun startTicker() {
+        if (tickerRunning) return
+        tickerRunning = true
+        ticker.post(object : Runnable {
+            override fun run() {
+                if (!tickerRunning) return
+                render()
+                if (speechService?.isPlaying == true || speechService?.isPaused == true) {
+                    ticker.postDelayed(this, TICK_MS)
+                } else {
+                    tickerRunning = false
+                }
+            }
+        })
+    }
+
+    private fun stopTicker() {
+        tickerRunning = false
+        ticker.removeCallbacksAndMessages(null)
+    }
 
     private fun render() {
         val svc = speechService
         val playing = svc?.isPlaying == true
         val paused = svc?.isPaused == true
+        val active = playing || paused
 
+        // ── State line ────────────────────────────────────────────────────────
         binding.tvState.text = when {
-            playing -> "Speaking…"
-            paused -> "Paused"
-            bound -> "Ready"
-            else -> "Starting…"
+            playing && svc?.isBufferingNext == true -> getString(R.string.state_buffering)
+            playing -> getString(R.string.state_speaking)
+            paused -> getString(R.string.state_paused)
+            bound -> getString(R.string.state_ready)
+            else -> getString(R.string.state_starting)
         }
-        binding.btnPlay.text = if (paused) "▶  Resume" else "▶  Read"
-        binding.btnStop.isEnabled = playing || paused
+
+        // ── Substate: what is happening, specifically ─────────────────────────
+        binding.tvSubstate.text = when {
+            playing && svc?.isBufferingNext == true ->
+                "Fetching the next part of the passage…"
+            playing -> readProgressLabel(svc)
+            paused -> "Tap play to carry on from here"
+            bound -> getString(R.string.substate_ready)
+            else -> "Connecting to the player…"
+        }
+
+        // ── Progress ──────────────────────────────────────────────────────────
+        val total = svc?.totalChars ?: 0
+        val spoken = svc?.spokenChars ?: 0
+        val showProgress = active && total > 0
+        binding.progressRead.visibility = if (showProgress) View.VISIBLE else View.GONE
+        if (showProgress) {
+            binding.progressRead.progress = ((spoken.toFloat() / total) * PROGRESS_MAX).toInt()
+                .coerceIn(0, PROGRESS_MAX)
+        }
+
+        // ── Primary control ───────────────────────────────────────────────────
+        binding.btnPlay.text = when {
+            paused -> getString(R.string.action_resume)
+            playing -> getString(R.string.action_read_again)
+            else -> getString(R.string.action_read)
+        }
+        binding.btnPlay.setIconResource(if (paused) R.drawable.ic_play else R.drawable.ic_play)
+        binding.btnStop.isEnabled = active
+
+        // ── Mini-player ───────────────────────────────────────────────────────
+        binding.miniPlayer.visibility = if (active) View.VISIBLE else View.GONE
+        if (active) {
+            binding.miniPlayPause.setIconResource(
+                if (playing) R.drawable.ic_pause else R.drawable.ic_play,
+            )
+            binding.miniTitle.text = readProgressLabel(svc)
+            binding.miniProgress.progress = if (total > 0) {
+                ((spoken.toFloat() / total) * PROGRESS_MAX).toInt().coerceIn(0, PROGRESS_MAX)
+            } else {
+                0
+            }
+        }
+
+        // ── Backend label, when More is open ──────────────────────────────────
+        binding.tvBackend.text = if (prefs.preferEdgeTts) {
+            "Voice: Arkadia neural (${prefs.backendUrl})"
+        } else {
+            "Voice: this device's speech engine"
+        }
     }
 
-    private fun showError(msg: String) {
-        binding.tvError.visibility = View.VISIBLE
-        binding.tvError.text = msg
-        binding.tvState.text = "Could not read"
+    /** A concrete position, in the terms the user is reading in. */
+    private fun readProgressLabel(svc: SpeechService?): String {
+        val total = svc?.totalChars ?: 0
+        val spoken = svc?.spokenChars ?: 0
+        val segment = svc?.segmentIndex ?: 0
+        val segments = svc?.segmentCount ?: 0
+        return when {
+            total <= 0 -> getString(R.string.state_speaking)
+            segments > 1 -> "Part $segment of $segments · ${percent(spoken, total)}%"
+            else -> "${percent(spoken, total)}% of the passage"
+        }
     }
 
-    private fun clearError() {
-        binding.tvError.visibility = View.GONE
-        binding.tvError.text = ""
+    private fun percent(spoken: Int, total: Int): Int =
+        if (total <= 0) 0 else ((spoken.toFloat() / total) * 100).toInt().coerceIn(0, 100)
+
+    private fun showNotice(msg: String) {
+        binding.tvNotice.visibility = View.VISIBLE
+        binding.tvNotice.text = msg
+        if (msg.contains("Display over other apps", ignoreCase = true)) {
+            overlayDeniedNoticeShown = true
+        }
     }
 
-    private fun refreshCacheLabel() {
-        val bytes = cacheDir.walkTopDown().filter { it.isFile && it.name.startsWith("sonata_") }
+    private fun clearNotice() {
+        binding.tvNotice.visibility = View.GONE
+        binding.tvNotice.text = ""
+    }
+
+    private fun refreshStorageLabel() {
+        val bytes = cacheDir.walkTopDown()
+            .filter { it.isFile && it.name.startsWith("sonata_") }
             .sumOf { it.length() }
-        binding.tvCache.text = "Cached audio: ${bytes / 1024} KB"
+        binding.tvCache.text = if (bytes == 0L) {
+            "No audio stored"
+        } else {
+            "Clear ${bytes / 1024} KB of stored audio"
+        }
         binding.tvCache.setOnClickListener {
             cacheDir.walkTopDown().filter { it.isFile && it.name.startsWith("sonata_") }
                 .forEach { it.delete() }
-            refreshCacheLabel()
+            refreshStorageLabel()
         }
+    }
+
+    private companion object {
+        /** Used only for the "about N minutes" estimate on the count line. */
+        const val WORDS_PER_MINUTE = 150
+
+        const val PROGRESS_MAX = 1000
+        const val TICK_MS = 400L
     }
 }
