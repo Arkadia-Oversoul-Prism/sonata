@@ -201,7 +201,12 @@ class MainActivity : AppCompatActivity() {
 
     private fun renderSpeed(speed: Float) {
         binding.btnSpeed.text = "${speed}×"
-        binding.tvSpeedValue.text = "${speed}× — tap the chip on the main screen to step"
+        binding.tvSpeedValue.text = when {
+            speed < 0.9f -> "${speed}× — slower than normal"
+            speed > 1.6f -> "${speed}× — much faster"
+            speed > 1.05f -> "${speed}× — faster than normal"
+            else -> "${speed}× — normal pace"
+        }
     }
 
     private fun setupPitch() {
@@ -497,7 +502,6 @@ class MainActivity : AppCompatActivity() {
             playing -> getString(R.string.action_read_again)
             else -> getString(R.string.action_read)
         }
-        binding.btnPlay.setIconResource(if (paused) R.drawable.ic_play else R.drawable.ic_play)
         binding.btnStop.isEnabled = active
 
         // ── Mini-player ───────────────────────────────────────────────────────
