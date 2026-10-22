@@ -35,25 +35,36 @@ class TextLimitsTest {
     }
 
     @Test
-    fun `text past the ceiling is truncated to the backend limit and reported`() {
+    fun `text past the single-request ceiling is accepted whole, not truncated`() {
+        // The ceiling is a *request* ceiling, not a ceiling on what the user may
+        // read. A passage longer than one request is split across several, so the
+        // validator must hand it on intact. Truncating here is the defect a user
+        // reported as "there appears to be a length limit".
         val text = "b".repeat(MAX_TTS_CHARS + 250)
+        val result = TextLimits.validate(text)
+
+        assertTrue(result is TextValidation.Ready)
+        assertEquals(MAX_TTS_CHARS + 250, (result as TextValidation.Ready).text.length)
+    }
+
+    @Test
+    fun `whitespace is trimmed and a long passage survives intact`() {
+        val text = "   " + "c".repeat(MAX_TTS_CHARS + 10) + "   "
+        val result = TextLimits.validate(text)
+
+        assertTrue(result is TextValidation.Ready)
+        assertEquals(MAX_TTS_CHARS + 10, (result as TextValidation.Ready).text.length)
+    }
+
+    @Test
+    fun `text past the input ceiling is truncated and reported`() {
+        val text = "d".repeat(MAX_INPUT_CHARS + 500)
         val result = TextLimits.validate(text)
 
         assertTrue(result is TextValidation.Truncated)
         result as TextValidation.Truncated
-        assertEquals(MAX_TTS_CHARS, result.text.length)
-        assertEquals(MAX_TTS_CHARS + 250, result.originalLength)
-    }
-
-    @Test
-    fun `whitespace is trimmed before the ceiling is applied`() {
-        // 5000 characters of content plus padding must truncate to the ceiling of
-        // content, not to ceiling-minus-padding.
-        val text = "   " + "c".repeat(MAX_TTS_CHARS + 10) + "   "
-        val result = TextLimits.validate(text)
-        assertTrue(result is TextValidation.Truncated)
-        assertEquals(MAX_TTS_CHARS, (result as TextValidation.Truncated).text.length)
-        assertEquals(MAX_TTS_CHARS + 10, result.originalLength)
+        assertEquals(MAX_INPUT_CHARS, result.text.length)
+        assertEquals(MAX_INPUT_CHARS + 500, result.originalLength)
     }
 
     @Test
@@ -61,5 +72,15 @@ class TextLimitsTest {
         // kernel/tts.py::synthesize does text.strip()[:5000]; a different client
         // bound would either waste a round trip or silently lose the tail.
         assertEquals(5000, MAX_TTS_CHARS)
+    }
+
+    @Test
+    fun `the accepted input ceiling is far above one request`() {
+        // If these ever met, the app would be back to cutting a long passage off
+        // at what one request can carry.
+        assertTrue(
+            "accepted input must exceed a single request by a wide margin",
+            MAX_INPUT_CHARS > MAX_TTS_CHARS * 5,
+        )
     }
 }

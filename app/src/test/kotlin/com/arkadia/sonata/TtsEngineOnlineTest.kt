@@ -51,6 +51,7 @@ class TtsEngineOnlineTest {
         offlineReady: Boolean = true,
         backendUrl: String = "https://example.test",
         preferOnline: Boolean = true,
+        prefetchDepth: Int = 0,
     ): Harness {
         val transport = FakeTransport(result = result, delayMs = delayMs)
         val player = FakeAudioPlayer()
@@ -69,9 +70,28 @@ class TtsEngineOnlineTest {
             // JVM implementation, and the engine's main-thread hop must be
             // advanceable by advanceUntilIdle().
             mainDispatcher = StandardTestDispatcher(scope.testScheduler),
+            // Deterministic fetch order: the engine fetches one piece at a time as
+            // the previous one finishes, so a test can assert on the sequence.
+            prefetchDepth = prefetchDepth,
         )
         engine.listener = listener
         return Harness(engine, transport, player, offline, listener, settings, cacheDir)
+    }
+
+    /**
+     * Drive a segmented read to its end.
+     *
+     * `advanceUntilIdle()` alone cannot finish a multi-piece read: it is the real
+     * `MediaPlayer`, not the engine, that reports a piece ended. This plays each
+     * piece and completes it in turn, exactly as the platform player would, so the
+     * assertions are about the engine's sequencing rather than about the fake's
+     * bookkeeping.
+     */
+    private fun TestScope.playThrough(h: Harness, maxPieces: Int = 500) {
+        repeat(maxPieces) {
+            advanceUntilIdle()
+            if (h.player.playing) h.player.complete() else return
+        }
     }
 
     // ── Success path ──────────────────────────────────────────────────────────
@@ -163,19 +183,60 @@ class TtsEngineOnlineTest {
     }
 
     @Test
-    fun `oversized input is truncated before sending and the truncation is reported`() = runTest {
-        val h = harness(this)
-        val long = "x".repeat(MAX_TTS_CHARS + 500)
+    fun `input longer than one request is split, not truncated, and every piece is fetched`() = runTest {
+        // The defect the founder reported as a length limit: the old path cut the
+        // text at the backend's 5000-character request ceiling and spoke only that.
+        // A longer passage must now be read in full, as several requests whose
+        // concatenation is the original text.
+        val h = harness(this, prefetchDepth = 0)
+        val long = buildString { repeat(2000) { append("word$it ") } } // ~14k chars
+        assertTrue("fixture must exceed one request", long.length > MAX_TTS_CHARS)
+
+        h.engine.speak(long)
+        playThrough(h)
+
+        assertTrue("a long passage needs more than one request", h.transport.requests.size > 1)
+        // No request may exceed the backend's own ceiling, or the tail of that
+        // request would be silently dropped server-side.
+        assertTrue(
+            "no piece may exceed the backend ceiling: ${h.transport.requests.map { it.first.length }}",
+            h.transport.requests.all { it.first.length <= MAX_TTS_CHARS },
+        )
+        // Nothing lost and nothing reordered: the requests, in order, are the text.
+        // Compared against the trimmed input, which is what validation hands on.
+        assertEquals(long.trim(), h.transport.requests.joinToString("") { it.first })
+        // No truncation was reported, because none happened.
+        assertTrue(
+            "a passage that fits the input ceiling must not be reported as truncated",
+            h.listener.failures.none { it.msg.contains("truncated") },
+        )
+    }
+
+    @Test
+    fun `the first request is short so speech can begin early`() = runTest {
+        // Measured against the live gateway: a 340-character request returns in
+        // ~1.8 s, a 5000-character request in ~29 s. Asking for the whole passage
+        // first is what made speech feel like it never started.
+        val h = harness(this, prefetchDepth = 0)
+        val long = buildString { repeat(2000) { append("word$it ") } }
         h.engine.speak(long)
         advanceUntilIdle()
 
-        assertEquals(1, h.transport.requests.size)
-        assertEquals(MAX_TTS_CHARS, h.transport.requests[0].first.length)
+        val first = h.transport.requests.first().first.length
+        assertTrue("the opening request must be short, was $first", first <= SpeechChunker.STREAM_FIRST_LIMIT)
+    }
 
-        val truncationNotice = h.listener.failures.firstOrNull {
-            it.msg.contains("truncated")
-        }
-        assertTrue("truncation must be reported to the user", truncationNotice != null)
+    @Test
+    fun `the whole passage is played as consecutive pieces in order`() = runTest {
+        val h = harness(this, prefetchDepth = 0)
+        val long = buildString { repeat(2000) { append("word$it ") } }
+        h.engine.speak(long)
+        playThrough(h)
+
+        // Each piece reaching the player in turn, and the last one completing the
+        // read. Fewer plays than pieces would mean a piece was skipped.
+        assertEquals(h.transport.requests.size, h.player.playCalls)
+        assertTrue("the read must finish", h.listener.completed)
     }
 
     // ── Failure and fallback ──────────────────────────────────────────────────

@@ -85,4 +85,78 @@ class SpeechChunkerTest {
         pieces.forEach { assertTrue(it.length <= 1000) }
         assertEquals(text, pieces.joinToString(""))
     }
+
+    // ── Streaming split ───────────────────────────────────────────────────────
+
+    /**
+     * The load-bearing invariant for progressive playback: a passage read piece by
+     * piece must still be read in full and in order. Without this a long selection
+     * would silently lose or repeat content at the seams.
+     */
+    @Test
+    fun `streaming split reproduces the input exactly`() {
+        val text = (1..400).joinToString(" ") { "Sentence number $it ends here." }
+        assertEquals(text, SpeechChunker.splitForStreaming(text).joinToString(""))
+    }
+
+    @Test
+    fun `streaming split reproduces an unbroken run of characters exactly`() {
+        // No boundary anywhere: every seam is a hard cut, which is where an
+        // off-by-one would drop or duplicate a character.
+        val text = "z".repeat(10_000)
+        val pieces = SpeechChunker.splitForStreaming(text)
+        assertEquals(text, pieces.joinToString(""))
+        assertTrue("expected many pieces", pieces.size > 5)
+    }
+
+    @Test
+    fun `the first streaming piece is short so audio can start early`() {
+        val text = (1..400).joinToString(" ") { "Sentence number $it ends here." }
+        val pieces = SpeechChunker.splitForStreaming(text)
+        assertTrue(
+            "first piece was ${pieces[0].length}, which would delay the first sound",
+            pieces[0].length <= SpeechChunker.STREAM_FIRST_LIMIT,
+        )
+    }
+
+    @Test
+    fun `the first streaming piece is never a fragment`() {
+        // A first piece of one word would be over before the next was ready.
+        val text = ("x".repeat(200) + ". ") + ("y".repeat(5000))
+        val pieces = SpeechChunker.splitForStreaming(text)
+        assertTrue(
+            "first piece was only ${pieces[0].length} characters",
+            pieces[0].length >= SpeechChunker.STREAM_MIN_FIRST,
+        )
+    }
+
+    @Test
+    fun `text shorter than the first limit is a single piece`() {
+        val text = "A short sentence."
+        assertEquals(listOf(text), SpeechChunker.splitForStreaming(text))
+    }
+
+    @Test
+    fun `streaming pieces after the first are larger than the first`() {
+        // The later pieces are prefetched during playback, so they can be bigger;
+        // that keeps the request count down on a long passage.
+        val text = (1..400).joinToString(" ") { "Sentence number $it ends here." }
+        val pieces = SpeechChunker.splitForStreaming(text)
+        assertTrue(pieces.size > 2)
+        assertTrue(
+            "later pieces should exceed the first limit",
+            pieces.drop(1).any { it.length > SpeechChunker.STREAM_FIRST_LIMIT },
+        )
+    }
+
+    @Test
+    fun `every streaming piece fits within one backend request`() {
+        val text = (1..800).joinToString(" ") { "Sentence number $it ends here." }
+        SpeechChunker.splitForStreaming(text).forEach {
+            assertTrue(
+                "a piece of ${it.length} would be truncated by the backend",
+                it.length <= MAX_TTS_CHARS,
+            )
+        }
+    }
 }
