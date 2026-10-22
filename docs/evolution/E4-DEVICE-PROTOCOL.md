@@ -36,7 +36,54 @@ not attempted. An `arm64` image would require an arm64 host; this is x86_64.
 **Classification: BLOCKED** on device availability. Not `UNVERIFIED` through
 oversight, and not `PASS`.
 
-## 2. What is ready to run
+## 2. What to install — the release artifact cannot be installed
+
+**Measured, and it invalidates the obvious path.** The release APK that CI uploads
+is **unsigned** and cannot be installed on any device:
+
+```
+$ apksigner verify app-release-unsigned.apk
+DOES NOT VERIFY
+ERROR: Missing META-INF/MANIFEST.MF
+```
+
+`app/build.gradle.kts` declares no `signingConfig` for the `release` build type,
+`git log -S signingConfig` over the whole history is **empty**, and the workflow
+references no keystore secret. The release APK has therefore never been signed, by
+CI or locally. Downloading `Sonata-release-*.apk` from a run and installing it will
+fail with `INSTALL_PARSE_FAILED_NO_CERTIFICATES`.
+
+| Artifact | Signed | Installable | sha256 |
+|---|---|---|---|
+| `app-release-unsigned.apk` (what CI uploads) | **no** | **no** | `7f5ab696…` |
+| `app-debug.apk` (local build) | yes, Android Debug key | **yes** | `b4d9cf8b…` |
+
+**Use the debug APK for device testing.** Build it from the candidate revision:
+
+```bash
+./gradlew assembleDebug --no-daemon
+adb install -r app/build/outputs/apk/debug/app-debug.apk
+```
+
+Its package id is `com.arkadia.sonata.debug`, **not** `com.arkadia.sonata`, so it
+installs alongside a release build rather than replacing it. That also means the
+cache path in §3.3 uses the `.debug` suffix.
+
+Signing the release APK is a deliberate non-action: it needs a keystore, and
+introducing one is a release-authority change, not a test step. A throwaway
+signature was verified to make the artifact installable (`apksigner sign` with the
+debug key → `VERIFIED`), which confirms the missing signature is the *only*
+obstacle — but that was done on a copy in `/tmp`, and the repository is untouched.
+
+### Two caveats that follow from testing the debug variant
+
+1. **Debug is not minified.** `release` sets `isMinifyEnabled = true` and
+   `isShrinkResources = true`; debug does neither. A debug build therefore does not
+   exercise ProGuard/R8. Passing on debug does not prove the release build behaves
+   identically — it proves the *source* does.
+2. **Debug exempts loopback from the cleartext rule** (see §3.2 M-7).
+
+## 2b. What is ready to run
 
 The instrumented suite is **compiled and packaged** (`app-debug-androidTest.apk`),
 so no test authoring remains — only execution on a device.
@@ -56,7 +103,10 @@ working copy and is **not** recreated; it is not evidence and its count is unrel
 
 ```bash
 git fetch origin
-git checkout b55f6716d846dd78df1ce5744535c7b4583aecdf
+# Resolve the candidate rather than trusting a SHA copied into this document,
+# which goes stale on the next commit. Record what it prints.
+git checkout feat/process-text-playback-hardening-01
+git rev-parse HEAD               # <-- record this in the report
 
 # A real device (USB debugging on), or an emulator on a KVM-capable host:
 adb devices                      # must list exactly one authorised device
@@ -89,7 +139,7 @@ performed by hand, and each is a separate claim:
 | M-4 | Tap pause, then resume, in the notification | Playback pauses and resumes from roughly where it stopped |
 | M-5 | Tap stop | Playback ends; the notification clears; no sound continues |
 | M-6 | Incoming call or another app taking audio focus during playback | Playback stops or ducks; it does not play over the call |
-| M-7 | Configure an **http://** backend, then speak | A message naming plain HTTP and recommending `https://` — not `UnknownServiceException` |
+| M-7 | Configure an **http://** backend on a **non-loopback host** (e.g. `http://example.com`), then speak | A message naming plain HTTP and recommending `https://` — not `UnknownServiceException` |
 | M-8 | Repeat M-1 ten times in a row | No degradation; cache does not grow without bound (the D-3 leak) |
 | M-9 | Deny the notification permission (Android 13+), then play | Playback works; no notification. Denial must not break playback |
 | M-10 | Rotate the device / change system dark mode during playback | Playback is not interrupted |
@@ -97,6 +147,24 @@ performed by hand, and each is a separate claim:
 M-2, M-7 and M-8 are the device-level expressions of the three repairs in this
 slice. If M-2 fails, the readiness repair does not hold on that device and the
 slice's central claim is false for it.
+
+**M-7 has a trap, and it is a false-negative trap.** The debug build's network
+policy exempts `localhost` and `127.0.0.1` from the cleartext rule (that exemption
+exists so the instrumented suite can reach `MockWebServer`). Testing M-7 with
+`http://localhost:8080` will therefore **not** produce a cleartext error, and
+concluding from that silence that the repair is broken would be wrong — the policy
+is working exactly as configured. M-7 must use a non-loopback host. Verified in the
+built artifact:
+
+```
+$ aapt2 dump xmltree --file res/xml/network_security_config.xml app-debug.apk
+    E: domain-config
+      A: cleartextTrafficPermitted=true
+        T: 'localhost'        <-- exempt
+        T: '127.0.0.1'        <-- exempt
+    E: base-config
+      A: cleartextTrafficPermitted=false   <-- everything else still refused
+```
 
 ### 3.3 Cache-leak check (M-8)
 
@@ -144,9 +212,15 @@ establish behaviour across API levels.
 | Boundary | State |
 |---|---|
 | Source builds, tests pass, CI gates | **VERIFIED** |
+| A CI artifact is installable as-is | **FAILED** — release is unsigned; use the debug APK |
 | Device suite executes | **BLOCKED** — no device, no KVM, no virtualisation flags |
 | Primary user workflow on a device | **UNVERIFIED** |
+| Release-minified build behaves as debug | **UNVERIFIED** — debug skips R8 |
 | Replacement of any user workflow | **NOT CLAIMED** |
+
+The second row is a genuine defect, not a missing step: the artifact this project
+publishes cannot be installed. It is recorded here rather than fixed, because
+signing requires a keystore and that is a release-authority decision.
 
 No merge, deploy, release, or production configuration change accompanies this
 document. Human authorization remains required.
