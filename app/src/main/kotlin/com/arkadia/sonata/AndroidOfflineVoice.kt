@@ -39,6 +39,14 @@ class AndroidOfflineVoice(
 
     private var currentUtteranceId: String? = null
 
+    /**
+     * Utterance ids queued for the current request. A long passage is several
+     * queued utterances, so progress and completion must be matched against all of
+     * them rather than one id.
+     */
+    @Volatile
+    private var queuedIds: List<String> = emptyList()
+
     init {
         tts = TextToSpeech(context) { status ->
             ready = status == TextToSpeech.SUCCESS
@@ -89,15 +97,39 @@ class AndroidOfflineVoice(
         }
 
         lastRangeStart = 0
-        val utteranceId = "sonata_${UUID.randomUUID()}"
-        currentUtteranceId = utteranceId
-
         engine.setSpeechRate(SpeedSteps.clamp(speed))
         engine.setPitch(pitch.coerceIn(0.5f, 2.0f))
+
+        // Chunk to the platform's own ceiling. Without this, a passage longer than
+        // getMaxSpeechInputLength() is rejected by speak() with ERROR and nothing is
+        // heard — which is what made a paragraph fail while a word worked.
+        val pieces = SpeechChunker.split(remainder, platformLimit())
+        if (pieces.isEmpty()) {
+            onDone()
+            return
+        }
+
+        val ids = pieces.map { "sonata_${UUID.randomUUID()}" }
+        currentUtteranceId = ids.first()
+        queuedIds = ids
+
+        // baseOffset[i] is where piece i starts, in the caller's coordinate space.
+        val baseOffsets = IntArray(pieces.size)
+        var running = from
+        for (i in pieces.indices) {
+            baseOffsets[i] = running
+            running += pieces[i].length
+        }
+
+        var startedReported = false
+
         engine.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
 
             override fun onStart(id: String?) {
-                onStart()
+                if (!startedReported) {
+                    startedReported = true
+                    onStart()
+                }
             }
 
             /**
@@ -106,32 +138,64 @@ class AndroidOfflineVoice(
              * records an offset the caller can resume from.
              */
             override fun onRangeStart(id: String?, start: Int, end: Int, frame: Int) {
-                if (id != utteranceId) return
-                lastRangeStart = start
-                onRange(from + start)
+                val index = queuedIds.indexOf(id ?: return)
+                if (index < 0) return
+                val absolute = baseOffsets[index] + start
+                lastRangeStart = absolute - from
+                onRange(absolute)
             }
 
             override fun onDone(id: String?) {
-                if (id != utteranceId) return
-                onDone()
+                val index = queuedIds.indexOf(id ?: return)
+                if (index < 0) return
+                // Report the end of the piece just finished, so a pause between
+                // pieces resumes at the boundary rather than repeating the piece.
+                lastRangeStart = baseOffsets[index] + pieces[index].length - from
+                onRange(baseOffsets[index] + pieces[index].length)
+                // Only the final piece completes the request; the rest are queued.
+                if (index == queuedIds.lastIndex) onDone()
             }
 
             @Deprecated("Superseded by onError(String, Int)", ReplaceWith("onError(id, 0)"))
             override fun onError(id: String?) {
-                if (id != utteranceId) return
+                if (id !in queuedIds) return
                 onError("Offline speech failed")
             }
 
             override fun onError(id: String?, errorCode: Int) {
-                if (id != utteranceId) return
+                if (id !in queuedIds) return
                 onError("Offline speech failed (code $errorCode)")
             }
         })
 
-        val result = engine.speak(remainder, TextToSpeech.QUEUE_FLUSH, null, utteranceId)
-        if (result == TextToSpeech.ERROR) {
+        // QUEUE_ADD for everything after the first piece, so the whole passage is
+        // queued with the engine and continues without a gap between pieces.
+        val first = engine.speak(pieces.first(), TextToSpeech.QUEUE_FLUSH, null, ids.first())
+        if (first == TextToSpeech.ERROR) {
+            queuedIds = emptyList()
             onError("Offline speech could not start")
+            return
         }
+        for (i in 1 until pieces.size) {
+            val queued = engine.speak(pieces[i], TextToSpeech.QUEUE_ADD, null, ids[i])
+            if (queued == TextToSpeech.ERROR) {
+                // Report rather than pretending the whole passage was read.
+                queuedIds = emptyList()
+                onError("Offline speech stopped after ${baseOffsets[i]} characters")
+                return
+            }
+        }
+    }
+
+    /**
+     * The platform's own speech input ceiling, read from the engine when it can be.
+     * The documented value is 4000; reading it keeps the chunker correct on a
+     * platform that changes it.
+     */
+    private fun platformLimit(): Int = try {
+        TextToSpeech.getMaxSpeechInputLength()
+    } catch (e: Exception) {
+        SpeechChunker.PLATFORM_LIMIT
     }
 
     /** The character offset last reached in the current utterance. */
@@ -139,6 +203,7 @@ class AndroidOfflineVoice(
 
     override fun stop() {
         currentUtteranceId = null
+        queuedIds = emptyList()
         tts?.stop()
     }
 

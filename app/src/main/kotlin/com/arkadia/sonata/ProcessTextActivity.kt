@@ -66,6 +66,16 @@ class ProcessTextActivity : Activity() {
         }
         startForegroundService(speechIntent)
 
+        // Show the player. Previously this activity started the service and
+        // finished, so selecting "Sonata" produced no on-screen response at all:
+        // the user could not tell whether anything had happened, nor stop it.
+        startActivity(
+            Intent(this, PlayerActivity::class.java).apply {
+                putExtra(PlayerActivity.EXTRA_PREVIEW, text.take(PREVIEW_CHARS))
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+        )
+
         // Show the floating overlay if permitted; otherwise point at the setting.
         if (Settings.canDrawOverlays(this)) {
             val overlayIntent = Intent(this, FloatingOverlayService::class.java).apply {
@@ -81,6 +91,11 @@ class ProcessTextActivity : Activity() {
             ).show()
             requestOverlayPermission()
         }
+    }
+
+    private companion object {
+        /** Characters of the selection shown in the player; the read uses all of it. */
+        const val PREVIEW_CHARS = 600
     }
 
     private fun requestOverlayPermission() {

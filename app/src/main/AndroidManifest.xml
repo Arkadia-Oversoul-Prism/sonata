@@ -43,6 +43,15 @@
             </intent-filter>
         </activity>
 
+        <!-- ── Visible player for a PROCESS_TEXT read ───────────────────
+             Without this, selecting Sonata produced no on-screen feedback at all:
+             the activity started the service and finished immediately. -->
+        <activity
+            android:name=".PlayerActivity"
+            android:exported="false"
+            android:label="@string/app_name"
+            android:launchMode="singleTop" />
+
         <!-- ── Settings ─────────────────────────────────────────────── -->
         <activity
             android:name=".SettingsActivity"

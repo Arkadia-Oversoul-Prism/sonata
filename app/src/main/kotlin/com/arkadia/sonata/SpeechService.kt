@@ -113,6 +113,15 @@ class SpeechService : Service() {
 
     // ── Public control surface (used when bound) ───────────────────────────
 
+    /**
+     * Persist a new speed. The engine reads speed per request, so this applies
+     * from the next read rather than mid-utterance — the UI says so rather than
+     * implying an immediate change.
+     */
+    fun applySpeed(speed: Float) {
+        prefs.speed = speed
+    }
+
     fun pause()  { tts.pause();  updateNotification(playing = false) }
     fun resume() { tts.resume(); updateNotification(playing = true)  }
     fun stop()   { tts.stop();   stopForeground(STOP_FOREGROUND_REMOVE); stopSelf() }
