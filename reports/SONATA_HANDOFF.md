@@ -1,5 +1,180 @@
 # Sonata — Session Handoff
 
+**Recorded:** 2026-10-22 (latest run)
+**Repository:** `Arkadia-Oversoul-Prism/sonata`
+**Default branch:** `feature/sonata-tts-app` (unchanged)
+**Working branch for this run:** `feat/sonata-ux-and-playback-overhaul`
+
+---
+
+# 0. Latest run — immediate-start playback, floating player, UX overhaul
+
+**Base:** `8a12970624e02f1d6de27a4f9e3f6da90ca27d4e` (default branch, unchanged)
+**Branch:** `feat/sonata-ux-and-playback-overhaul`
+**HEAD at time of writing:** `d68d38a1a6851618f22d967824e66b04998c153e`
+**Branch:** https://github.com/Arkadia-Oversoul-Prism/sonata/tree/feat/sonata-ux-and-playback-overhaul
+**Diff:** https://github.com/Arkadia-Oversoul-Prism/sonata/compare/feature/sonata-tts-app...feat/sonata-ux-and-playback-overhaul
+**Status:** pushed and verified on the remote; **not merged** (merge is the
+founder's call, and out of this run's authority).
+
+## 0.1 The two reported defects, traced to one cause
+
+The founder reported that speech did not begin immediately and that a length limit
+seemed to truncate input. Both are the same defect: **the engine requested the whole
+passage as a single synthesis request and waited for the entire response before
+playing a single sample.** Latency therefore scaled with passage length.
+
+Measured against the live gateway before any change (warm requests):
+
+| Request | Time to first audio | Response |
+| --- | --- | --- |
+| 340 characters | ~1.8 s | ~22 KB |
+| 5000 characters (the cap) | **~29.3 s** | 1.89 MB |
+
+So a paragraph took half a minute to start. That is "speech does not begin
+immediately". And the backend itself does `text.strip()[:5000]`
+(`kernel/tts.py::synthesize`), so anything longer was cut off server-side — the
+"length limit". The client also declared the same 5000-character ceiling as the
+*maximum accepted input*, which is why the user met it.
+
+## 0.2 What changed
+
+**Progressive, segmented playback (`SpeechChunker`, `TtsEngine`).** The passage is
+split into pieces — a deliberately short first piece, larger ones after — and played
+piece by piece. The next piece is synthesised while the current one is playing.
+
+- First piece: at most 240 characters, floored at 60 so the opening utterance is a
+  phrase and not a fragment. Time to first audio becomes roughly that of the 340-char
+  measurement above (~1.8 s), not the 5000-char one.
+- Later pieces: at most 900 characters, prefetched during playback.
+- **The split is an exact partition.** `pieces.joinToString("") == text` is pinned by
+  test, including for a 10,000-character unbroken run where every seam is a hard cut.
+  That invariant is what lets the app claim the whole passage is read.
+- A failure part-way through falls back to the device voice **with the remainder** —
+  the failing piece plus everything after it. Taking only the failing piece (the
+  first implementation) silently dropped the rest of a long passage; a regression
+  test caught it and the fix is in `reportFallback`.
+- Fixed a pipeline deadlock the tests exposed: nothing requested the piece after the
+  playing one once playback advanced, so a multi-piece read stalled after the first.
+
+**The length ceiling.** `MAX_TTS_CHARS` (5000) remains the *per-request* ceiling
+because it mirrors the backend's own truncation point. `MAX_INPUT_CHARS` (100,000) is
+now the ceiling on *accepted input*. A long passage is read in full; it is no longer
+rejected or silently shortened at 5000 characters.
+
+**The floating player (`FloatingOverlayService`).** "Does not open or float at all"
+had three independent causes, each sufficient on its own:
+
+1. **Crash.** `addView` with `TYPE_APPLICATION_OVERLAY` throws `BadTokenException`
+   when the overlay grant is absent, out of `onCreate`. A crashing service looks
+   exactly like a dead button. The grant is now checked and the service exits
+   cleanly, with the read continuing in the notification as a usable fallback.
+2. **Tap never reached the bubble.** The drag listener consumed `ACTION_DOWN`, which
+   suppresses the framework's click detection, so the bubble's `OnClickListener`
+   never fired and a collapsed player could not be reopened. The tap is now
+   recognised inside the touch handler.
+3. **Leaked window.** `onDestroy` unbound unconditionally and removed the view last;
+   stopping before the bind completed threw and left an unresponsive window attached.
+   The view is removed first and the unbind is conditional.
+
+**Callback architecture (`SpeechService`).** Five single mutable callback slots
+(`onStart`, `onPause`, …) were replaced with a `Client` listener list. The main screen
+and the floating player are bound at the same time, so whichever bound last silently
+stole the events from the other — which is why the overlay never learned a read had
+finished and stayed on screen over silence.
+
+**The interface.** It was a form: a title, a text box, two buttons, a settings dump.
+It now has one token set (`dimens.xml`, `colors.xml`, `themes.xml`), a real icon set
+replacing framework drawables, and a reading surface organised around the five
+questions a listening user has. Everything optional is behind **More**; there is
+still no second screen. New in this run:
+
+- a real progress bar and a *Part N of M* position, driven by the engine's actual
+  spoken-character count, shown only while a read is live;
+- honest states: Preparing, Buffering (fetching the next part), Speaking, Paused;
+- a persistent mini-player (play/pause, float, stop) so controls stay reachable;
+- a word count and estimated listening time, so the read can be judged before starting;
+- Paste and Clear as real actions; the last passage is restored on relaunch;
+- an overlay-permission notice that says what to grant and takes the user there.
+
+**Text handoff.** Two further defects, both met on first use:
+
+- The **share** route was dead: `ProcessTextActivity` accepted `EXTRA_TEXT` but the
+  manifest declared only a `PROCESS_TEXT` filter, so Sonata never appeared in the
+  share sheet. The `SEND` filter is now declared. (The selection-menu route worked,
+  which is why this looked like it worked.)
+- The read did not start on handoff — it waited for a tap, gated behind an `auto read`
+  preference that was never exposed. A handoff now starts reading immediately.
+  Relaunching with the restored passage deliberately does *not* auto-read.
+
+## 0.3 Evidence
+
+| Item | Value |
+| --- | --- |
+| Unit tests | **110 pass, 0 failures** (`./gradlew testDebugUnitTest`) |
+| Instrumented tests | 21 tests compile and package; **never executed** (no device, no KVM) |
+| Debug APK | builds locally; `apksigner verify` — signed, installable |
+| CI (per-commit, all green) | `05e3ee1b`, `b93d2e0f`, `55c732f`, `28515d2`, `aac7311` |
+| CI run for `55c732f` | [39732542990](https://github.com/Arkadia-Oversoul-Prism/sonata/actions/runs/39732542990) — success |
+| Installable debug APK | [artifact 12405671869](https://github.com/Arkadia-Oversoul-Prism/sonata/actions/runs/39732542990/artifacts/12405671869) (`Sonata-debug-installable-55c732fa…`) |
+| Unit-test report | [artifact 12405671873](https://github.com/Arkadia-Oversoul-Prism/sonata/actions/runs/39732542990/artifacts/12405671873) |
+| Handoff previous run | `reports/SONATA_HANDOFF_2026-10-22_single-screen.md` |
+
+The debug APK is the installable one (Android debug key). The release APK is
+unsigned and therefore not installable; it is a build product for inspection.
+
+## 0.4 Confirmed by execution vs. still needing a device
+
+**Confirmed by execution here:**
+- The unit suite, including the new regression tests for the split invariant, the
+  progressive pipeline, pause/resume between pieces, and the mid-passage fallback.
+- Debug and release APK assembly; instrumented sources compile.
+- Every CI run on this branch is green.
+
+**Not verified on a physical device — do not claim otherwise:**
+- That speech now *audibly* begins in about a second. The latency figures above are
+  backend measurements plus the design of the new path; the perceived improvement has
+  not been heard on hardware.
+- That the floating player opens, drags, collapses and expands. The three defects are
+  fixed and the code paths are correct by inspection, but the overlay has never run on
+  a device in this environment.
+- That the redesigned screen looks right at real densities and font scales.
+- The instrumented suite (21 tests) has never executed.
+
+## 0.5 Known limitations, stated honestly
+
+- **There is no true audio streaming.** The gateway returns a complete MP3 per
+  request; there is no partial-audio protocol to consume. Playback begins early
+  because the *first request is short*, not because audio is streamed. Each piece is
+  a separate request, so the seam between pieces can be audible as a brief pause; the
+  pipeline hides it by prefetching, but it is not gapless.
+- **`MAX_INPUT_CHARS` is 100,000**, not unlimited. Beyond that the user is told the
+  first 100,000 characters are being read, rather than being silently cut off.
+- **The neural voice is Edge TTS.** `elevenlabs_active=false` on the backend. No
+  provider choice is exposed in the UI, and none should be until a provider is
+  actually configured — the previous UI implied one.
+- **The pitch control applies to the device voice only.** The backend contract has no
+  pitch parameter, so the control is labelled accordingly rather than silently ignored.
+- **Audio cache** is the engine's staged MP3s in `cacheDir`; More reports the size and
+  can clear it. There is no persistent library, export or history.
+
+## 0.6 Three highest-value next actions
+
+1. **Install the debug APK on the founder's device and confirm the two reported
+   defects are gone** — specifically that a paragraph starts speaking in about a
+   second, and that a 20,000-character passage is read to the end. This is the only
+   way to close the report that started this run.
+2. **Grant the overlay permission and exercise the floating player** — open, drag,
+   collapse to the bubble, expand, and confirm it survives switching apps. The code is
+   fixed but unproven on hardware.
+3. **Add an emulator job to CI** (`reactivecircus/android-emulator-runner`, API 34) so
+   the 21 instrumented tests execute. They are written and compiling; they have never
+   run, and until they do, the device-facing behaviour rests on inspection alone.
+
+---
+
+# 1. Previous run — merged single-screen implementation
+
 **Recorded:** 2026-10-22
 **Repository:** `Arkadia-Oversoul-Prism/sonata`
 **Default branch:** `feature/sonata-tts-app`
