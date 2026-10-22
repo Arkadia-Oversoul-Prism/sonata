@@ -32,6 +32,12 @@ Commits on this branch, oldest first:
 **Status:** pushed and verified on the remote; **not merged** (merge is the
 founder's call, and out of this run's authority).
 
+> The HEAD above is the branch tip at the moment this section was written. Because
+> writing it produced a further commit, the live tip is one or two commits ahead of
+> the SHA printed here. The branch link and the commit table below are the reliable
+> references; `git ls-remote origin refs/heads/feat/sonata-ux-and-playback-overhaul`
+> is authoritative.
+
 ## 0.1 The two reported defects, traced to one cause
 
 The founder reported that speech did not begin immediately and that a length limit
