@@ -11,7 +11,7 @@
 
 **Base:** `8a12970624e02f1d6de27a4f9e3f6da90ca27d4e` (default branch, unchanged)
 **Branch:** `feat/sonata-ux-and-playback-overhaul`
-**HEAD at time of writing:** `b29b1e661f7e2b372b3d002d374cdac5bdd139c1`
+**HEAD at time of writing:** `b0fdf70bdcb539680e69e8429a4cdead37596fbd`
 **Pull request:** [#4](https://github.com/Arkadia-Oversoul-Prism/sonata/pull/4) (draft)
 
 Commits on this branch, oldest first:
@@ -26,7 +26,7 @@ Commits on this branch, oldest first:
 | `d68d38a1` | Speed label describes the pace, not the navigation |
 | `0d2724cd` | Mini-player no longer covers the end of the passage |
 | `a92c02ed` | Handoff records the final SHA and the PR |
-| `b29b1e66` | `.openhands/` ignored so agent notes cannot land in a feature branch |
+| `b29b1e66`, `b0fdf70b` | `.openhands/` ignored so agent notes cannot land in a feature branch |
 **Branch:** https://github.com/Arkadia-Oversoul-Prism/sonata/tree/feat/sonata-ux-and-playback-overhaul
 **Diff:** https://github.com/Arkadia-Oversoul-Prism/sonata/compare/feature/sonata-tts-app...feat/sonata-ux-and-playback-overhaul
 **Status:** pushed and verified on the remote; **not merged** (merge is the
