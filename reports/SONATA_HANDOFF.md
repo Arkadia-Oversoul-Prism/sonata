@@ -11,8 +11,22 @@
 
 **Base:** `8a12970624e02f1d6de27a4f9e3f6da90ca27d4e` (default branch, unchanged)
 **Branch:** `feat/sonata-ux-and-playback-overhaul`
-**HEAD at time of writing:** `0d2724cd48115cab431b766bde7cf375822b5227`
+**HEAD at time of writing:** `b29b1e661f7e2b372b3d002d374cdac5bdd139c1`
 **Pull request:** [#4](https://github.com/Arkadia-Oversoul-Prism/sonata/pull/4) (draft)
+
+Commits on this branch, oldest first:
+
+| Commit | What it does |
+| --- | --- |
+| `05e3ee1b` | Progressive segmented synthesis — the latency and length-limit fix |
+| `b93d2e0f` | Designed reading screen; three floating-player defects; callback list |
+| `55c732f` | Mid-passage fallback dropped the rest of the passage (test-found) |
+| `28515d2` | Device-protocol suite for the progressive read over real HTTP |
+| `aac7311` | Handoff starts the read immediately; share filter declared |
+| `d68d38a1` | Speed label describes the pace, not the navigation |
+| `0d2724cd` | Mini-player no longer covers the end of the passage |
+| `a92c02ed` | Handoff records the final SHA and the PR |
+| `b29b1e66` | `.openhands/` ignored so agent notes cannot land in a feature branch |
 **Branch:** https://github.com/Arkadia-Oversoul-Prism/sonata/tree/feat/sonata-ux-and-playback-overhaul
 **Diff:** https://github.com/Arkadia-Oversoul-Prism/sonata/compare/feature/sonata-tts-app...feat/sonata-ux-and-playback-overhaul
 **Status:** pushed and verified on the remote; **not merged** (merge is the
