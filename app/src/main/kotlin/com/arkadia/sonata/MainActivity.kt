@@ -108,6 +108,11 @@ class MainActivity : AppCompatActivity() {
     /**
      * Text handed over by another app — a PROCESS_TEXT selection or a plain share.
      * Both are accepted so the read starts from whichever route the user took.
+     *
+     * The read starts immediately. Selecting text and choosing Sonata is an explicit
+     * request to hear it; making the user then tap Read would contradict the whole
+     * point of the handoff. (A relaunch with the restored passage deliberately does
+     * *not* auto-read: coming back to the app is not a request to listen.)
      */
     private fun consumeIncomingText(intent: Intent?) {
         val incoming = intent?.getCharSequenceExtra(Intent.EXTRA_PROCESS_TEXT)
@@ -119,7 +124,7 @@ class MainActivity : AppCompatActivity() {
 
         binding.etText.setText(text)
         renderWordCount()
-        if (prefs.autoRead) read()
+        read()
     }
 
     /**

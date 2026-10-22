@@ -31,7 +31,11 @@
             </intent-filter>
         </activity>
 
-        <!-- ── PROCESS_TEXT — appears in system text-selection menu ── -->
+        <!-- ── PROCESS_TEXT and share targets ─────────────────────────
+             Two routes in, both handled by ProcessTextActivity:
+             PROCESS_TEXT is the text-selection menu; SEND is the system share
+             sheet. Only the first was declared, so "share to Sonata" silently
+             never appeared even though the code accepted EXTRA_TEXT. -->
         <activity
             android:name=".ProcessTextActivity"
             android:exported="true"
@@ -39,6 +43,11 @@
             android:excludeFromRecents="true">
             <intent-filter>
                 <action android:name="android.intent.action.PROCESS_TEXT" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="text/plain" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <data android:mimeType="text/plain" />
             </intent-filter>
