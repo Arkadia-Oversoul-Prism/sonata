@@ -516,6 +516,9 @@ class MainActivity : AppCompatActivity() {
             } else {
                 0
             }
+            reserveSpaceForMiniPlayer()
+        } else {
+            clearSpaceForMiniPlayer()
         }
 
         // ── Backend label, when More is open ──────────────────────────────────
@@ -536,6 +539,39 @@ class MainActivity : AppCompatActivity() {
             total <= 0 -> getString(R.string.state_speaking)
             segments > 1 -> "Part $segment of $segments · ${percent(spoken, total)}%"
             else -> "${percent(spoken, total)}% of the passage"
+        }
+    }
+
+    /**
+     * Keep the bottom of the passage clear of the mini-player.
+     *
+     * The mini-player floats over the scroll view, so without this it covers the
+     * hint text and the tail of the passage — the part the user is most likely to
+     * be reading when they started the read. The padding is measured from the
+     * mini-player's own height, so it stays correct at any font scale.
+     */
+    private fun reserveSpaceForMiniPlayer() {
+        binding.miniPlayer.post {
+            val content = binding.scrollContent
+            val needed = binding.miniPlayer.height +
+                resources.getDimensionPixelSize(R.dimen.space_md) * 2 +
+                resources.getDimensionPixelSize(R.dimen.space_xl)
+            if (content.paddingBottom != needed) {
+                content.setPadding(
+                    content.paddingLeft, content.paddingTop,
+                    content.paddingRight, needed,
+                )
+            }
+        }
+    }
+
+    /** Put the bottom padding back when the mini-player goes away, so a finished
+     *  read does not leave a large blank gap under the passage. */
+    private fun clearSpaceForMiniPlayer() {
+        val content = binding.scrollContent
+        val base = resources.getDimensionPixelSize(R.dimen.space_xl)
+        if (content.paddingBottom != base) {
+            content.setPadding(content.paddingLeft, content.paddingTop, content.paddingRight, base)
         }
     }
 
