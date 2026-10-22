@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Debug-only manifest overlay.
+
+  Adds the debug network security config so instrumented tests can reach a local
+  http://localhost MockWebServer. The release manifest is untouched and keeps the
+  platform default (cleartext refused).
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application android:networkSecurityConfig="@xml/network_security_config" />
+</manifest>

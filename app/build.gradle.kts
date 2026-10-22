@@ -13,6 +13,7 @@ android {
         targetSdk = 34
         versionCode = 1
         versionName = "1.0.0"
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
     buildTypes {
@@ -35,6 +36,16 @@ android {
         buildConfig = true
     }
 
+    testOptions {
+        unitTests {
+            // android.util.Log is a stub on the JVM; returning defaults lets the
+            // engine's logic be tested without Robolectric. This does not make any
+            // Android framework *behaviour* available — the tests exercise the
+            // AudioPlayer / OfflineVoice / TtsTransport seams instead.
+            isReturnDefaultValues = true
+        }
+    }
+
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
@@ -54,4 +65,21 @@ dependencies {
     implementation(libs.okhttp)
     // MediaSessionCompat + MediaStyle notification
     implementation(libs.androidx.media)
+
+    // Unit tests run on the JVM. The engine's logic is exercised through the
+    // AudioPlayer / OfflineVoice / TtsTransport seams, so no Android framework
+    // or Robolectric is required.
+    testImplementation(libs.junit)
+    testImplementation(libs.kotlinx.coroutines.test)
+
+    // Instrumented tests run on a device/emulator. They are the only surface that
+    // can exercise the real platform TextToSpeech engine and the real OkHttp
+    // stack, which is where the readiness and cleartext defects actually appeared.
+    androidTestImplementation(libs.junit)
+    androidTestImplementation(libs.androidx.test.ext.junit)
+    androidTestImplementation(libs.androidx.test.runner)
+    androidTestImplementation(libs.androidx.test.rules)
+    androidTestImplementation(libs.espresso.core)
+    androidTestImplementation(libs.kotlinx.coroutines.test)
+    androidTestImplementation(libs.okhttp.mockwebserver)
 }

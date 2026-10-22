@@ -2,69 +2,54 @@ package com.arkadia.sonata
 
 import android.app.Activity
 import android.content.Intent
-import android.net.Uri
 import android.os.Bundle
-import android.provider.Settings
 import android.widget.Toast
 
 /**
- * Handles android.intent.action.PROCESS_TEXT — appears as
- * "Speak with Sonata" in the native text-selection pop-up across all apps.
+ * Receives text from Android's text-selection menu and hands it to the one screen.
  *
- * No UI is shown (transparent theme). The activity starts SpeechService
- * (foreground) and optionally FloatingOverlayService, then finishes.
- * Target latency: < 300ms from tap to speech start.
+ * This activity has no UI. It previously opened a separate player, which is how the
+ * app ended up with two screens and a blank-looking handover: the player showed only
+ * a preview and the real text sat in a service the user could not see. Forwarding to
+ * [MainActivity] means the selection lands in the input the user would have typed
+ * into, with the read starting there.
+ *
+ * `noHistory` is deliberately not set: a second selection while an instance is alive
+ * arrives through [onNewIntent], and both entry points forward the same way.
  */
 class ProcessTextActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-
-        val text = intent
-            ?.getCharSequenceExtra(Intent.EXTRA_PROCESS_TEXT)
-            ?.toString()
-            ?.trim()
-
-        if (text.isNullOrEmpty()) {
-            finish(); return
-        }
-
-        val prefs = Prefs(this)
-
-        // ── Start foreground TTS service ──────────────────────────────────
-        val speechIntent = Intent(this, SpeechService::class.java).apply {
-            action = SpeechService.ACTION_SPEAK
-            putExtra(SpeechService.EXTRA_TEXT,  text)
-            putExtra(SpeechService.EXTRA_LABEL, "SONATA")
-        }
-        startForegroundService(speechIntent)
-
-        // ── Show floating overlay if permitted ────────────────────────────
-        if (Settings.canDrawOverlays(this)) {
-            val overlayIntent = Intent(this, FloatingOverlayService::class.java).apply {
-                putExtra(FloatingOverlayService.EXTRA_LABEL,   "ORACLE TRANSMISSION")
-                putExtra(FloatingOverlayService.EXTRA_PREVIEW, text)
-            }
-            startService(overlayIntent)
-        } else {
-            // Prompt for overlay permission (non-blocking)
-            Toast.makeText(
-                this,
-                "Grant 'Display over other apps' in Settings for the floating player.",
-                Toast.LENGTH_LONG
-            ).show()
-            requestOverlayPermission()
-        }
-
-        finish()
+        forward(intent)
     }
 
-    private fun requestOverlayPermission() {
-        val intent = Intent(
-            Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-            Uri.parse("package:$packageName")
+    override fun onNewIntent(intent: Intent?) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        forward(intent)
+    }
+
+    private fun forward(intent: Intent?) {
+        // Some apps send the read-only variant; accept either, plus a plain share.
+        val raw = intent?.getCharSequenceExtra(Intent.EXTRA_PROCESS_TEXT)
+            ?: intent?.getCharSequenceExtra(Intent.EXTRA_PROCESS_TEXT_READONLY)
+            ?: intent?.getCharSequenceExtra(Intent.EXTRA_TEXT)
+
+        val text = raw?.toString()?.trim().orEmpty()
+        if (text.isEmpty()) {
+            // Nothing to read: say so rather than opening an empty screen.
+            Toast.makeText(this, "No text selected", Toast.LENGTH_SHORT).show()
+            finish()
+            return
+        }
+
+        startActivity(
+            Intent(this, MainActivity::class.java).apply {
+                putExtra(Intent.EXTRA_PROCESS_TEXT, text)
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+            }
         )
-        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        startActivity(intent)
+        finish()
     }
 }

@@ -1,242 +1,511 @@
 package com.arkadia.sonata
 
-import android.content.Context
-import android.media.MediaPlayer
-import android.speech.tts.TextToSpeech
-import android.speech.tts.UtteranceProgressListener
 import android.util.Log
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import okhttp3.MediaType.Companion.toMediaType
-import okhttp3.OkHttpClient
-import okhttp3.Request
-import okhttp3.RequestBody.Companion.toRequestBody
-import org.json.JSONObject
 import java.io.File
-import java.util.Locale
 import java.util.UUID
-import java.util.concurrent.TimeUnit
 
 private const val TAG = "SonataTts"
 
 /**
  * Two-tier TTS engine.
  *
- *  Tier 1 (online, neural quality) — calls the Arkadia Oracle Temple /api/tts
- *    endpoint, streams the MP3, plays via MediaPlayer.
- *  Tier 2 (offline, instant) — Android built-in TextToSpeech.
+ *  Tier 1 (online, neural) — `POST {backendUrl}/api/tts`; the returned audio is
+ *    written to a cache file and played by [AudioPlayer].
+ *  Tier 2 (offline) — the platform `TextToSpeech` engine via [OfflineVoice].
  *
- * The engine exposes a simple [speak]/[pause]/[resume]/[stop] interface.
- * Callers register a [Listener] to receive lifecycle callbacks.
+ * Guarantees this class is responsible for:
+ *
+ *  - **Single owner.** Every [speak] supersedes any in-flight request: the old
+ *    request is cancelled and its file deleted, and a superseded request can
+ *    never start playback or clobber the new one.
+ *  - **Bounded input.** Text is validated and truncated to the backend's own
+ *    ceiling before it is sent ([TextLimits]).
+ *  - **Cleanup on every exit path.** Completion, error, supersession, [stop] and
+ *    [shutdown] all delete the temp file.
+ *  - **Honest fallback.** Any online failure — transport error, non-success HTTP,
+ *    non-audio content type, empty body, undecodable audio — falls back to offline
+ *    speech and reports why.
+ *  - **Honest resume.** Online pause/resume continues the same decoded stream.
+ *    Offline pause stops the utterance and records the character reached; resume
+ *    re-speaks the remainder. That is a content resume with a re-synthesis seam,
+ *    not sample-accurate resumption, and it is reported as such.
  */
 class TtsEngine(
-    private val context: Context,
-    private val prefs: Prefs,
+    private val settings: TtsSettings,
+    private val cacheDir: File,
+    private val transport: TtsTransport,
+    private val player: AudioPlayer,
+    private val offline: OfflineVoice,
+    scope: CoroutineScope? = null,
+    /**
+     * The dispatcher for state mutations and listener callbacks. Production uses
+     * the main thread so state changes are serialised; tests supply the test
+     * scheduler, because `Dispatchers.Main` has no JVM implementation.
+     */
+    private val mainDispatcher: CoroutineDispatcher = Dispatchers.Main,
+    /**
+     * How long the offline path waits for the platform engine to finish
+     * initialising before reporting it unavailable.
+     *
+     * Injectable because initialisation cost is device-dependent: sub-second on
+     * hardware, but inflated by orders of magnitude on a software-emulated
+     * (no-KVM) Android runtime. Device tests raise it so they measure behaviour
+     * rather than emulation speed; production uses [DEFAULT_OFFLINE_READY_TIMEOUT_MS].
+     */
+    private val offlineReadyTimeoutMs: Long = DEFAULT_OFFLINE_READY_TIMEOUT_MS,
 ) {
+
+    /**
+     * Whether this engine created its own scope. Only a scope the engine owns is
+     * cancelled on [shutdown]: cancelling an injected scope would tear down the
+     * caller's, which is exactly what happened to the test scheduler.
+     */
+    private val ownsScope = scope == null
+
+    private val scope: CoroutineScope = scope ?: CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
     interface Listener {
-        fun onStart()
-        fun onPaused()
-        fun onResumed()
+        /** Playback of the current utterance started, on [engine]. */
+        fun onStart(engine: TtsEngineKind)
+
+        /** Playback paused; the utterance is resumable. */
+        fun onPaused(engine: TtsEngineKind)
+
+        /** Playback continued from the pause point. */
+        fun onResumed(engine: TtsEngineKind)
+
+        /** The utterance finished. */
         fun onComplete()
-        fun onError(msg: String)
+
+        /**
+         * Something went wrong. [msg] is user-presentable; [fellBackTo] is
+         * non-null when offline speech took over as a result.
+         */
+        fun onError(msg: String, fellBackTo: TtsEngineKind?)
     }
-
-    // ── Android TTS (tier 2) ───────────────────────────────────────────────
-    private var androidTts: TextToSpeech? = null
-    private var androidTtsReady = false
-
-    // ── MediaPlayer for Edge TTS audio (tier 1) ───────────────────────────
-    private var mediaPlayer: MediaPlayer? = null
-    private var isPaused = false
-
-    // ── Coroutine scope (tied to engine lifecycle) ─────────────────────────
-    private val scope  = CoroutineScope(Dispatchers.IO + Job())
-    private val http   = OkHttpClient.Builder()
-        .connectTimeout(8, TimeUnit.SECONDS)
-        .readTimeout(30, TimeUnit.SECONDS)
-        .build()
 
     var listener: Listener? = null
-    private var currentMode: Mode = Mode.IDLE
 
-    enum class Mode { IDLE, EDGE_TTS, ANDROID_TTS }
+    /** The authoritative playback state. */
+    private var state: PlaybackState = PlaybackState.Idle
 
-    // ── Initialise Android TTS ─────────────────────────────────────────────
-    fun init(onReady: (() -> Unit)? = null) {
-        androidTts = TextToSpeech(context) { status ->
-            androidTtsReady = status == TextToSpeech.SUCCESS
-            if (androidTtsReady) {
-                androidTts?.language = Locale.US
-                Log.i(TAG, "Android TTS ready")
-                onReady?.invoke()
-            } else {
-                Log.w(TAG, "Android TTS init failed (status=$status)")
+    val playbackState: PlaybackState get() = state
+
+    /** The in-flight request, if any; used to supersede it. */
+    private var inFlight: Job? = null
+
+    /**
+     * Monotonic request token. Incremented by every [speak]/[stop], so a result
+     * arriving after its request was superseded is dropped instead of playing.
+     */
+    private var generation: Int = 0
+
+    /** The temp file owned by the current request, if any. */
+    private var currentFile: File? = null
+
+    /**
+     * Set while [speakOffline] is dispatching, so the progress callback is only
+     * accepted for the utterance actually being started.
+     *
+     * Without this, a *late* `onRange` from an utterance that [pause] already
+     * stopped can overwrite the resume point — the platform engine is not required
+     * to have stopped reporting synchronously — and [resume] would then re-speak
+     * from the wrong character. Progress is accepted only when this is true, which
+     * is the window during which the current utterance is genuinely speaking.
+     */
+    private var acceptingProgress = false
+
+    val isPlaying: Boolean get() = state.isPlaying
+    val isPaused: Boolean get() = state.isPaused
+    val currentEngine: TtsEngineKind? get() = state.engine
+
+    // ── Public API ────────────────────────────────────────────────────────────
+
+    /**
+     * Speak [raw].
+     *
+     * Empty or whitespace-only input is refused with a reported error rather than
+     * being sent to the backend or silently ignored.
+     */
+    fun speak(raw: CharSequence?) {
+        supersede()
+
+        when (val validation = TextLimits.validate(raw)) {
+            is TextValidation.Empty -> {
+                state = PlaybackState.Idle
+                listener?.onError("Nothing to read", null)
             }
+
+            is TextValidation.Ready -> start(validation.text, truncatedFrom = null)
+
+            is TextValidation.Truncated -> start(
+                validation.text,
+                truncatedFrom = validation.originalLength,
+            )
         }
     }
 
-    // ── Public API ──────────────────────────────────────────────────────────
-
-    fun speak(text: String) {
-        stop()
-        isPaused = false
-
-        val url = prefs.edgeTtsUrl.trim()
-        if (prefs.preferEdgeTts && url.isNotEmpty()) {
-            speakEdge(text, url)
-        } else {
-            speakAndroid(text)
-        }
-    }
-
+    /**
+     * Pause the current utterance.
+     *
+     * No-op when nothing is playing, so a stray notification or overlay tap
+     * cannot invent a paused state.
+     */
     fun pause() {
-        when (currentMode) {
-            Mode.EDGE_TTS -> {
-                mediaPlayer?.pause()
-                isPaused = true
-                listener?.onPaused()
+        when (val current = state) {
+            is PlaybackState.Online -> {
+                if (player.pause()) {
+                    state = current.copy(positionMs = player.currentPositionMs(), paused = true)
+                    listener?.onPaused(TtsEngineKind.ONLINE)
+                }
             }
-            Mode.ANDROID_TTS -> {
-                androidTts?.stop()
-                isPaused = true
-                listener?.onPaused()
+
+            is PlaybackState.Offline -> {
+                offline.stop()
+                acceptingProgress = false
+                state = current.copy(paused = true)
+                listener?.onPaused(TtsEngineKind.OFFLINE)
             }
-            Mode.IDLE -> {}
+
+            PlaybackState.Idle -> Unit
         }
     }
 
+    /**
+     * Resume a paused utterance.
+     *
+     * Reports an error when there is nothing resumable rather than claiming a
+     * resume that did not happen.
+     */
     fun resume() {
-        when (currentMode) {
-            Mode.EDGE_TTS -> {
-                if (isPaused) {
-                    mediaPlayer?.start()
-                    isPaused = false
-                    listener?.onResumed()
+        when (val current = state) {
+            is PlaybackState.Online -> {
+                if (current.paused && player.resume()) {
+                    state = current.copy(paused = false)
+                    listener?.onResumed(TtsEngineKind.ONLINE)
+                } else if (current.paused) {
+                    listener?.onError("Could not resume audio", null)
                 }
             }
-            Mode.ANDROID_TTS -> {
-                // Android TTS cannot resume mid-utterance; restart not ideal
-                listener?.onResumed()
+
+            is PlaybackState.Offline -> {
+                if (!current.paused) return
+                if (current.remainingText() == null) {
+                    // Paused at the very end — nothing left to speak.
+                    finish()
+                    return
+                }
+                val from = current.charOffset
+                state = current.copy(paused = false)
+                listener?.onResumed(TtsEngineKind.OFFLINE)
+                speakOffline(current.text, fromChar = from, reportedFallback = null)
             }
-            Mode.IDLE -> {}
+
+            PlaybackState.Idle -> listener?.onError("Nothing to resume", null)
         }
     }
 
+    /** Stop and release everything. Safe to call in any state. */
     fun stop() {
-        mediaPlayer?.apply { if (isPlaying) stop(); reset(); release() }
-        mediaPlayer = null
-        androidTts?.stop()
-        currentMode = Mode.IDLE
-        isPaused = false
+        supersede()
+        state = PlaybackState.Idle
     }
 
-    val isPlaying: Boolean
-        get() = when (currentMode) {
-            Mode.EDGE_TTS    -> mediaPlayer?.isPlaying == true
-            Mode.ANDROID_TTS -> androidTts?.isSpeaking == true
-            Mode.IDLE        -> false
-        }
-
-    val isPausedState: Boolean get() = isPaused
-
+    /** Release all resources. */
     fun shutdown() {
-        stop()
-        androidTts?.shutdown()
-        androidTts = null
-        http.dispatcher.executorService.shutdown()
+        supersede()
+        state = PlaybackState.Idle
+        (offline as? AndroidOfflineVoice)?.shutdown()
+        transport.close()
+        if (ownsScope) scope.cancel()
     }
 
-    // ── Tier 1: Edge TTS (network) ─────────────────────────────────────────
+    // ── Internals ─────────────────────────────────────────────────────────────
 
-    private fun speakEdge(text: String, baseUrl: String) {
-        currentMode = Mode.EDGE_TTS
-        listener?.onStart()
+    /**
+     * Cancel any in-flight request and release current playback, deleting the temp
+     * file. Called before every new request and by [stop] / [shutdown].
+     */
+    private fun supersede() {
+        generation++
+        inFlight?.cancel()
+        inFlight = null
+        player.stop()
+        offline.stop()
+        acceptingProgress = false
+        currentFile?.delete()
+        currentFile = null
+    }
 
-        scope.launch {
-            try {
-                val body = JSONObject().apply {
-                    put("text", text)
-                    put("voice", prefs.voice)
-                    put("speed", prefs.speed.toDouble())
-                }.toString()
+    private fun start(text: String, truncatedFrom: Int?) {
+        if (truncatedFrom != null) {
+            // Say what will actually be read, before reading it.
+            listener?.onError(
+                "Text truncated to $MAX_TTS_CHARS characters ($truncatedFrom offered)",
+                null,
+            )
+        }
 
-                val req = Request.Builder()
-                    .url("${baseUrl.trimEnd('/')}/api/tts")
-                    .post(body.toRequestBody("application/json".toMediaType()))
-                    .build()
-
-                val resp = http.newCall(req).execute()
-                if (!resp.isSuccessful) throw RuntimeException("HTTP ${resp.code}")
-
-                val bytes = resp.body?.bytes()
-                    ?: throw RuntimeException("Empty body")
-
-                // Write to temp file (MediaPlayer needs a URI or file path)
-                val tmp = File(context.cacheDir, "sonata_${UUID.randomUUID()}.mp3")
-                tmp.writeBytes(bytes)
-
-                withContext(Dispatchers.Main) {
-                    playFile(tmp)
-                }
-            } catch (e: Exception) {
-                Log.w(TAG, "Edge TTS failed: ${e.message}; falling back to Android TTS")
-                withContext(Dispatchers.Main) {
-                    speakAndroid(text)
-                }
-            }
+        val url = settings.backendUrl.trim()
+        if (settings.preferOnline && url.isNotEmpty()) {
+            speakOnline(text, url)
+        } else {
+            speakOffline(text, fromChar = 0, reportedFallback = null)
         }
     }
 
-    private fun playFile(file: File) {
-        mediaPlayer = MediaPlayer().apply {
-            setDataSource(file.absolutePath)
-            prepare()
-            setOnCompletionListener {
-                currentMode = Mode.IDLE
-                file.delete()
-                listener?.onComplete()
+    /**
+     * The effective speech rate. The backend clamps speed to `[0.5, 2.0]` itself,
+     * so the engine clamps at the source: a value the UI offers but the backend
+     * silently rewrites would make the two disagree about what is being spoken.
+     */
+    private fun effectiveSpeed(): Float = SpeedSteps.clamp(settings.speed)
+
+    private fun speakOnline(text: String, url: String) {
+        val myGeneration = generation
+        val job = scope.launch {
+            val result = transport.fetch(
+                text = text,
+                voice = settings.voice,
+                speed = effectiveSpeed(),
+                baseUrl = url,
+            )
+
+            // Superseded while the request was in flight: drop the result.
+            if (myGeneration != generation || !isActive) return@launch
+
+            when (result) {
+                is SynthesisResult.Success -> {
+                    val file = try {
+                        writeTempFile(result.bytes)
+                    } catch (e: Exception) {
+                        Log.w(TAG, "could not stage audio: ${e.message}")
+                        withContext(mainDispatcher) {
+                            if (myGeneration == generation) {
+                                reportFallback(text, "Could not store audio")
+                            }
+                        }
+                        return@launch
+                    }
+
+                    // Take ownership synchronously, with no suspension point between
+                    // staging and this assignment. From here every cancellation path
+                    // (a new speak, stop, shutdown) runs supersede(), which deletes
+                    // currentFile — so a cancellation landing during the hop to the
+                    // main dispatcher cannot orphan the file. Relying on a delete
+                    // inside the hop would miss exactly that cancellation, which is
+                    // how staged files accumulated in the device protocol.
+                    currentFile = file
+
+                    if (myGeneration != generation) {
+                        releaseStagedFile(file)
+                        return@launch
+                    }
+
+                    withContext(mainDispatcher) {
+                        // Re-check on the main thread: a newer speak() may have run
+                        // between the check above and this hop.
+                        if (myGeneration != generation) {
+                            releaseStagedFile(file)
+                        } else {
+                            playStagedFile(file, text)
+                        }
+                    }
+                }
+
+                is SynthesisResult.Failure -> {
+                    withContext(mainDispatcher) {
+                        if (myGeneration == generation) reportFallback(text, result.reason)
+                    }
+                }
             }
-            setOnErrorListener { _, _, _ ->
-                currentMode = Mode.IDLE
-                file.delete()
-                listener?.onError("MediaPlayer error")
-                true
-            }
-            start()
+        }
+        inFlight = job
+    }
+
+    private fun playStagedFile(file: File, text: String) {
+        currentFile = file
+
+        val started = player.play(
+            file = file,
+            onCompletion = { finish() },
+            onError = { msg -> onPlaybackError(msg) },
+        )
+
+        if (started) {
+            state = PlaybackState.Online(text = text, positionMs = 0, paused = false)
+            listener?.onStart(TtsEngineKind.ONLINE)
+        } else {
+            // A 200 carrying bytes that are not decodable audio lands here.
+            Log.w(TAG, "staged audio could not be played; falling back")
+            file.delete()
+            currentFile = null
+            reportFallback(text, "Audio could not be played")
         }
     }
 
-    // ── Tier 2: Android TTS (offline) ──────────────────────────────────────
+    /**
+     * Speak [text] offline from [fromChar].
+     *
+     * The state is committed before [OfflineVoice.speak] so the progress callback
+     * has a state to update, and is rolled back if the utterance fails to start.
+     */
+    private fun speakOffline(text: String, fromChar: Int, reportedFallback: String?) {
+        whenOfflineReady(
+            onUnavailable = {
+                state = PlaybackState.Idle
+                listener?.onError(
+                    reportedFallback?.let { "$it. Offline voice is unavailable" }
+                        ?: "Offline voice is unavailable",
+                    null,
+                )
+            },
+            action = { startOfflineUtterance(text, fromChar, reportedFallback) },
+        )
+    }
 
-    private fun speakAndroid(text: String) {
-        if (!androidTtsReady) {
-            listener?.onError("TTS not initialised")
+    /**
+     * Run [action] once the offline engine can speak, waiting at most
+     * [offlineReadyTimeoutMs] for it; run [onUnavailable] when it never can.
+     *
+     * The wait runs off the main thread and is bounded: blocking the main thread
+     * to wait would risk an ANR, which is worse than the failure it avoids.
+     */
+    private fun whenOfflineReady(onUnavailable: () -> Unit, action: () -> Unit) {
+        if (offline.isReady()) {
+            action()
             return
         }
-        currentMode = Mode.ANDROID_TTS
 
-        androidTts?.apply {
-            setSpeechRate(prefs.speed)
-            setPitch(prefs.pitch)
-            setOnUtteranceProgressListener(object : UtteranceProgressListener() {
-                override fun onStart(utteranceId: String?) {
-                    listener?.onStart()
-                }
-                override fun onDone(utteranceId: String?) {
-                    currentMode = Mode.IDLE
-                    listener?.onComplete()
-                }
-                @Deprecated("Deprecated")
-                override fun onError(utteranceId: String?) {
-                    currentMode = Mode.IDLE
-                    listener?.onError("Android TTS error")
-                }
-            })
-            speak(text, TextToSpeech.QUEUE_FLUSH, null, "sonata_utt_${System.currentTimeMillis()}")
+        val myGeneration = generation
+        scope.launch {
+            val ready = offline.awaitReady(offlineReadyTimeoutMs)
+            withContext(mainDispatcher) {
+                // A newer speak()/stop() superseded this request while we waited.
+                if (myGeneration != generation) return@withContext
+                if (ready) action() else onUnavailable()
+            }
         }
-        listener?.onStart()
+    }
+
+    private fun startOfflineUtterance(text: String, fromChar: Int, reportedFallback: String?) {
+
+        state = PlaybackState.Offline(text = text, charOffset = fromChar, paused = false)
+        acceptingProgress = true
+        var started = false
+
+        offline.speak(
+            text = text,
+            fromChar = fromChar,
+            speed = effectiveSpeed(),
+            pitch = settings.pitch,
+            onStart = {
+                if (!started) {
+                    started = true
+                    listener?.onStart(TtsEngineKind.OFFLINE)
+                }
+            },
+            onRange = { reached ->
+                // Reject progress from a superseded or paused utterance: accepting
+                // it would move the resume point the user is relying on.
+                val current = state
+                if (acceptingProgress && current is PlaybackState.Offline && !current.paused) {
+                    state = current.copy(charOffset = reached)
+                }
+            },
+            onDone = {
+                if (acceptingProgress && state is PlaybackState.Offline) {
+                    acceptingProgress = false
+                    finish()
+                }
+            },
+            onError = { msg ->
+                if (acceptingProgress && state is PlaybackState.Offline) {
+                    acceptingProgress = false
+                    state = PlaybackState.Idle
+                    listener?.onError(
+                        reportedFallback?.let { "$it. $msg" } ?: msg,
+                        null,
+                    )
+                }
+            },
+        )
+
+        // Some platform engines never invoke onStart; report the start here if so.
+        if (!started && state is PlaybackState.Offline) {
+            listener?.onStart(TtsEngineKind.OFFLINE)
+        }
+    }
+
+    private fun reportFallback(text: String, reason: String) {
+        Log.w(TAG, "online synthesis failed ($reason); falling back to offline voice")
+
+        whenOfflineReady(
+            onUnavailable = {
+                // There is nothing to fall back to, so do not report one: claiming a
+                // fallback that cannot happen would misstate what the user hears.
+                state = PlaybackState.Idle
+                listener?.onError("$reason. Offline voice is unavailable", null)
+            },
+            action = {
+                // Report the degradation even though speech continues: the user asked
+                // for the neural voice and is about to hear the platform one, so a
+                // silent substitution would misrepresent what is being spoken.
+                listener?.onError(reason, TtsEngineKind.OFFLINE)
+                startOfflineUtterance(text, fromChar = 0, reportedFallback = null)
+            },
+        )
+    }
+
+    private fun onPlaybackError(msg: String) {
+        currentFile?.delete()
+        currentFile = null
+        state = PlaybackState.Idle
+        listener?.onError(msg, null)
+    }
+
+    private fun finish() {
+        currentFile?.delete()
+        currentFile = null
+        state = PlaybackState.Idle
+        listener?.onComplete()
+    }
+
+    /**
+     * Release a staged file and stop tracking it.
+     *
+     * The identity check matters: a superseded coroutine resumes after a newer
+     * request has already staged its own file, and unconditionally clearing
+     * [currentFile] would drop that newer file from tracking and leak it instead.
+     */
+    private fun releaseStagedFile(file: File) {
+        file.delete()
+        if (currentFile === file) currentFile = null
+    }
+
+    private fun writeTempFile(bytes: ByteArray): File {
+        val file = File(cacheDir, "sonata_${UUID.randomUUID()}.mp3")
+        file.writeBytes(bytes)
+        return file
+    }
+
+    companion object {
+        /**
+         * Production wait for the platform speech engine to initialise.
+         *
+         * Generous relative to the sub-second cold start seen on hardware: the cost
+         * of waiting too long is a brief silence, while the cost of giving up too
+         * early is no speech at all.
+         */
+        const val DEFAULT_OFFLINE_READY_TIMEOUT_MS: Long = 10_000
     }
 }

@@ -3,8 +3,10 @@ name: Build Sonata APK
 on:
   push:
     branches:
-      - main
-      - "feature/**"
+      # `feature/**` did not match this workstream's `feat/...` branch, so no
+      # push-triggered run had ever executed here and every push was silently
+      # ungated. Match any branch rather than depend on a naming prefix.
+      - "**"
   pull_request:
   workflow_dispatch:
 
@@ -27,12 +29,48 @@ jobs:
       - name: Make gradlew executable
         run: chmod +x gradlew
 
+      # The unit suite was previously run only by hand, so a green build said
+      # nothing about whether the tests passed. Run it here so the gate covers
+      # the behaviour the build alone cannot.
+      - name: Run unit tests
+        run: ./gradlew testDebugUnitTest --no-daemon
+
       - name: Build Release APK (unsigned)
         run: ./gradlew assembleRelease --no-daemon
 
+      # The device suites need an emulator and are not run here; compile them so
+      # the instrumented sources cannot silently rot.
+      - name: Compile instrumented tests
+        run: ./gradlew compileDebugAndroidTestKotlin --no-daemon
+
+      # The release APK is unsigned (no signingConfig is declared, and adding one
+      # needs a keystore, which is a release-authority decision). An unsigned APK
+      # cannot be installed, so the release artifact below is a build product for
+      # inspection, not something that can be put on a device.
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
           name: Sonata-release-${{ github.sha }}
           path: app/build/outputs/apk/release/*.apk
           retention-days: 30
+
+      # The debug APK is signed with the Android Debug key and therefore *is*
+      # installable. Build and upload it so device verification can proceed without
+      # a local Android toolchain. Package id: com.arkadia.sonata.debug.
+      - name: Build debug APK (installable)
+        run: ./gradlew assembleDebug --no-daemon
+
+      - name: Upload installable debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: Sonata-debug-installable-${{ github.sha }}
+          path: app/build/outputs/apk/debug/*.apk
+          retention-days: 30
+
+      - name: Upload test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Sonata-unit-test-reports-${{ github.sha }}
+          path: app/build/reports/tests/testDebugUnitTest/
+          retention-days: 14
