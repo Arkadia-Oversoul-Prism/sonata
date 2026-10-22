@@ -11,7 +11,8 @@
 
 **Base:** `8a12970624e02f1d6de27a4f9e3f6da90ca27d4e` (default branch, unchanged)
 **Branch:** `feat/sonata-ux-and-playback-overhaul`
-**HEAD at time of writing:** `d68d38a1a6851618f22d967824e66b04998c153e`
+**HEAD at time of writing:** `0d2724cd48115cab431b766bde7cf375822b5227`
+**Pull request:** [#4](https://github.com/Arkadia-Oversoul-Prism/sonata/pull/4) (draft)
 **Branch:** https://github.com/Arkadia-Oversoul-Prism/sonata/tree/feat/sonata-ux-and-playback-overhaul
 **Diff:** https://github.com/Arkadia-Oversoul-Prism/sonata/compare/feature/sonata-tts-app...feat/sonata-ux-and-playback-overhaul
 **Status:** pushed and verified on the remote; **not merged** (merge is the
@@ -114,7 +115,7 @@ still no second screen. New in this run:
 | Unit tests | **110 pass, 0 failures** (`./gradlew testDebugUnitTest`) |
 | Instrumented tests | 21 tests compile and package; **never executed** (no device, no KVM) |
 | Debug APK | builds locally; `apksigner verify` — signed, installable |
-| CI (per-commit, all green) | `05e3ee1b`, `b93d2e0f`, `55c732f`, `28515d2`, `aac7311` |
+| CI (per-commit, all green) | `05e3ee1b`, `b93d2e0f`, `55c732f`, `28515d2`, `aac7311`, `d68d38a1` |
 | CI run for `55c732f` | [39732542990](https://github.com/Arkadia-Oversoul-Prism/sonata/actions/runs/39732542990) — success |
 | Installable debug APK | [artifact 12405671869](https://github.com/Arkadia-Oversoul-Prism/sonata/actions/runs/39732542990/artifacts/12405671869) (`Sonata-debug-installable-55c732fa…`) |
 | Unit-test report | [artifact 12405671873](https://github.com/Arkadia-Oversoul-Prism/sonata/actions/runs/39732542990/artifacts/12405671873) |
