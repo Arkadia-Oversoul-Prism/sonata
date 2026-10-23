@@ -336,14 +336,11 @@ class MainActivity : AppCompatActivity() {
      * is nothing worth resuming, so the affordance disappears rather than offering
      * to read the last few characters.
      */
-    private fun resumableOffset(): Int {
-        val current = binding.etText.text?.toString().orEmpty()
-        if (current.isBlank()) return 0
-        if (prefs.lastPassage != current) return 0
-        val at = prefs.lastSpokenChars
-        if (at <= 0) return 0
-        return if (at >= current.length - MIN_RESUME_CHARS) 0 else at
-    }
+    private fun resumableOffset(): Int = ResumePoint.offset(
+        storedPassage = prefs.lastPassage,
+        storedOffset = prefs.lastSpokenChars,
+        currentPassage = binding.etText.text?.toString().orEmpty(),
+    )
 
     /** Carry on from the stored position in this passage. */
     private fun resumeRead() {
@@ -717,12 +714,6 @@ class MainActivity : AppCompatActivity() {
 
         /** Used only for the "about N minutes" estimate on the count line. */
         const val WORDS_PER_MINUTE = 150
-
-        /**
-         * Do not offer to resume within this many characters of the end: there is
-         * nothing left worth carrying on to.
-         */
-        const val MIN_RESUME_CHARS = 40
 
         const val PROGRESS_MAX = 1000
         const val TICK_MS = 400L
