@@ -375,12 +375,15 @@ class MainActivity : AppCompatActivity() {
             return
         }
         val preview = binding.etText.text?.toString().orEmpty()
-        startService(
-            Intent(this, FloatingOverlayService::class.java).apply {
-                putExtra(FloatingOverlayService.EXTRA_LABEL, "SONATA")
-                putExtra(FloatingOverlayService.EXTRA_PREVIEW, preview)
-            },
-        )
+        val intent = Intent(this, FloatingOverlayService::class.java).apply {
+            putExtra(FloatingOverlayService.EXTRA_LABEL, "SONATA")
+            putExtra(FloatingOverlayService.EXTRA_PREVIEW, preview)
+        }
+        // startForegroundService, not startService: the overlay is a foreground
+        // service now, and Android requires the start to say so. Calling
+        // startService on it throws from the background, which is where this runs
+        // as soon as the activity is being put away.
+        ContextCompat.startForegroundService(this, intent)
         moveTaskToBack(true)
     }
 

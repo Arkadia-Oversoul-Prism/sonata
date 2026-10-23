@@ -1,5 +1,8 @@
 package com.arkadia.sonata
 
+import android.app.Notification
+import android.app.NotificationManager
+import android.app.PendingIntent
 import android.app.Service
 import android.content.ComponentName
 import android.content.Context
@@ -10,6 +13,7 @@ import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
 import android.provider.Settings
+import androidx.core.app.NotificationCompat
 import android.util.Log
 import android.view.Gravity
 import android.view.LayoutInflater
@@ -45,6 +49,12 @@ private const val TAG = "SonataOverlay"
  *     was stopped before the bind completed, the unbind threw and the view was never
  *     removed — a leaked, unresponsive window. Unbinding is now conditional and the
  *     view is removed first.
+ *  4. It was a plain background service holding an overlay window. Android reclaims
+ *     background processes, and the window goes with them, so the player appeared and
+ *     then vanished — or never appeared at all when the process was killed on the way
+ *     out of the app. It is now a `specialUse` foreground service, which is what keeps
+ *     a window of this kind alive; the ongoing notification is the contract that
+ *     requires, and doubles as the user's way to close the overlay.
  */
 class FloatingOverlayService : Service() {
 
@@ -103,6 +113,46 @@ class FloatingOverlayService : Service() {
         }
     }
 
+    // ── Foreground ─────────────────────────────────────────────────────────
+
+    /**
+     * Hold the process at foreground priority so the window survives the user
+     * leaving the app — which is the entire point of a floating player.
+     */
+    private fun promoteToForeground() {
+        val open = PendingIntent.getActivity(
+            this, 0,
+            Intent(this, MainActivity::class.java),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+        val close = PendingIntent.getService(
+            this, 1,
+            Intent(this, FloatingOverlayService::class.java).setAction(ACTION_CLOSE),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+        val notification = NotificationCompat.Builder(this, SonataApp.OVERLAY_CHANNEL_ID)
+            .setSmallIcon(R.drawable.ic_wave)
+            .setContentTitle("Floating player")
+            .setContentText("Tap to open Sonata, or close the player")
+            .setContentIntent(open)
+            .addAction(0, "Close player", close)
+            .setOngoing(true)
+            .setSilent(true)
+            .setPriority(NotificationCompat.PRIORITY_MIN)
+            .build()
+
+        // No foregroundServiceType argument: the declared `specialUse` type is taken
+        // from the manifest, and passing one here that the manifest does not declare
+        // throws on API 34.
+        startForeground(SonataApp.OVERLAY_NOTIF_ID, notification)
+    }
+
+    /** Leave foreground and stop, in the one order that cannot crash. */
+    private fun closeDown() {
+        runCatching { stopForeground(STOP_FOREGROUND_REMOVE) }
+        stopSelf()
+    }
+
     // ── Window params ──────────────────────────────────────────────────────
 
     private val params = WindowManager.LayoutParams(
@@ -123,13 +173,20 @@ class FloatingOverlayService : Service() {
     override fun onCreate() {
         super.onCreate()
 
+        // Go foreground before anything else. The service is started with
+        // startForegroundService, and Android stops the app outright if it is not
+        // foregrounded within a few seconds — including when the service decides to
+        // exit. So the contract is satisfied first and the permission guard below
+        // exits *through* it, rather than before it.
+        promoteToForeground()
+
         // Guard before touching the window: an ungranted overlay permission makes
         // addView throw, and a crashing service is indistinguishable from a dead
         // button. Exiting cleanly leaves the read playing in the notification, which
         // is a usable fallback rather than a failure.
         if (!Settings.canDrawOverlays(this)) {
             Log.w(TAG, "overlay permission not granted; floating player will not start")
-            stopSelf()
+            closeDown()
             return
         }
 
@@ -153,7 +210,7 @@ class FloatingOverlayService : Service() {
             // Report and exit rather than leaving a half-created service.
             Log.w(TAG, "could not attach the floating player: ${e.message}")
             overlayView = null
-            stopSelf()
+            closeDown()
             return
         }
 
@@ -166,6 +223,10 @@ class FloatingOverlayService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (intent?.action == ACTION_CLOSE) {
+            stopSelf()
+            return START_NOT_STICKY
+        }
         if (!attached) return START_NOT_STICKY
         intent?.getStringExtra(EXTRA_LABEL)?.let { binding.tvLabel.text = it }
         intent?.getStringExtra(EXTRA_PREVIEW)?.let {
@@ -180,6 +241,8 @@ class FloatingOverlayService : Service() {
 
     override fun onDestroy() {
         stopTicker()
+        // The ongoing notification exists only while the window does.
+        runCatching { stopForeground(STOP_FOREGROUND_REMOVE) }
         // Remove the window first: if anything below throws, a leaked, unresponsive
         // overlay is the worst outcome — worse than a leaked service.
         if (attached) {
@@ -196,6 +259,20 @@ class FloatingOverlayService : Service() {
         }
         speechService = null
         super.onDestroy()
+    }
+
+    /** The largest x that still leaves the window fully on screen. */
+    private fun maxX(): Int {
+        val bounds = wm.currentWindowMetrics.bounds
+        val width = overlayView?.width ?: 0
+        return (bounds.width() - width).coerceAtLeast(0)
+    }
+
+    /** The largest y that still leaves the window fully on screen. */
+    private fun maxY(): Int {
+        val bounds = wm.currentWindowMetrics.bounds
+        val height = overlayView?.height ?: 0
+        return (bounds.height() - height).coerceAtLeast(0)
     }
 
     /** Truncated preview text, with the ellipsis only when something was cut. */
@@ -263,8 +340,12 @@ class FloatingOverlayService : Service() {
                     if (kotlin.math.abs(dx) > TAP_SLOP || kotlin.math.abs(dy) > TAP_SLOP) {
                         dragged = true
                     }
-                    params.x = initX + dx.toInt()
-                    params.y = initY + dy.toInt()
+                    // Clamp to the screen. Without this the player can be dragged
+                    // past the edge and left there, where it is invisible and
+                    // unreachable — indistinguishable from the player having closed
+                    // itself, and with no way back.
+                    params.x = (initX + dx.toInt()).coerceIn(0, maxX())
+                    params.y = (initY + dy.toInt()).coerceIn(0, maxY())
                     if (attached) wm.updateViewLayout(overlayView, params)
                     true
                 }
@@ -351,6 +432,9 @@ class FloatingOverlayService : Service() {
     companion object {
         const val EXTRA_LABEL = "label"
         const val EXTRA_PREVIEW = "preview"
+
+        /** Action from the notification's Close button. */
+        const val ACTION_CLOSE = "com.arkadia.sonata.overlay.CLOSE"
 
         /** Touch travel, in px, above which a gesture is a drag rather than a tap. */
         private const val TAP_SLOP = 12f

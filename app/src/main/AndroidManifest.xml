@@ -4,6 +4,11 @@
     <!-- ── Permissions ──────────────────────────────────────────────── -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+    <!-- The floating player is a window that must outlive the app being in the
+         background, so it is a foreground service. "special use" is the correct
+         declared type for an always-visible control surface that is neither media
+         playback (SpeechService owns that) nor location/camera/mic. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
     <!-- Requested at runtime on API 33+; without it the playback notification —
          and therefore every transport control — is invisible. -->
@@ -62,7 +67,12 @@
         <!-- ── Floating overlay service ──────────────────────────────── -->
         <service
             android:name=".FloatingOverlayService"
-            android:exported="false" />
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Floating playback controls shown over other apps" />
+        </service>
 
     </application>
 </manifest>
