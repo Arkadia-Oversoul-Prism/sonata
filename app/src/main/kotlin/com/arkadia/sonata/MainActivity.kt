@@ -384,7 +384,14 @@ class MainActivity : AppCompatActivity() {
         // startService on it throws from the background, which is where this runs
         // as soon as the activity is being put away.
         ContextCompat.startForegroundService(this, intent)
-        moveTaskToBack(true)
+
+        // Deliberately *not* moveTaskToBack. Sending the app away immediately meant
+        // that if the overlay failed to attach the user was left staring at their
+        // home screen with no idea why — the failure mode that produced the report
+        // "the floating player does not open or float at all". Leaving Sonata in
+        // front shows the player appearing over it, so the user can see that it
+        // worked and then switch apps themselves.
+        showNotice(getString(R.string.overlay_started))
     }
 
     // ── Lifecycle ─────────────────────────────────────────────────────────────

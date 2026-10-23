@@ -8,6 +8,7 @@
     <string name="action_stop">Stop</string>
     <string name="channel_playback">Sonata Playback</string>
     <string name="overlay_permission_prompt">Grant \'Display over other apps\' for the floating player</string>
+    <string name="overlay_started">Floating player on — switch to another app to use it</string>
 
     <!-- ── Reading screen ─────────────────────────────────────────────────── -->
 
