@@ -21,6 +21,7 @@ import android.view.LayoutInflater
 import android.view.MotionEvent
 import android.view.View
 import android.view.WindowManager
+import android.widget.FrameLayout
 import com.arkadia.sonata.databinding.OverlayBubbleBinding
 import com.arkadia.sonata.databinding.OverlayPlayerBinding
 
@@ -60,6 +61,13 @@ private const val TAG = "SonataOverlay"
 class FloatingOverlayService : Service() {
 
     private lateinit var wm: WindowManager
+
+    /**
+     * Holds both states at once. The window is attached once and collapse/expand
+     * only toggles visibility, so no user gesture performs a window detach/attach —
+     * two operations that can each throw, and a throw in a service kills the app.
+     */
+    private lateinit var container: FrameLayout
     private lateinit var binding: OverlayPlayerBinding
     private lateinit var bubble: OverlayBubbleBinding
     private var overlayView: View? = null
@@ -179,7 +187,11 @@ class FloatingOverlayService : Service() {
         // foregrounded within a few seconds — including when the service decides to
         // exit. So the contract is satisfied first and the permission guard below
         // exits *through* it, rather than before it.
+        // Step logging, so a failure on a device that cannot be debugged here can be
+        // pinpointed from logcat alone: `adb logcat -s SonataOverlay`.
+        Log.i(TAG, "starting floating player")
         promoteToForeground()
+        Log.i(TAG, "foreground notification posted")
 
         // Guard before touching the window: an ungranted overlay permission makes
         // addView throw, and a crashing service is indistinguishable from a dead
@@ -190,6 +202,7 @@ class FloatingOverlayService : Service() {
             closeDown()
             return
         }
+        Log.i(TAG, "overlay permission granted")
 
         wm = getSystemService(WindowManager::class.java)
 
@@ -202,10 +215,20 @@ class FloatingOverlayService : Service() {
         setupButtons()
         setupBubble()
 
-        overlayView = binding.root
+        // Both states live in the window from the start; collapsing only toggles
+        // which is visible. Swapping them by removeView/addView meant two window
+        // operations per tap that can each throw, and it flickered.
+        container = FrameLayout(this).apply {
+            addView(binding.root)
+            addView(bubble.root)
+        }
+        bubble.root.visibility = View.GONE
+
+        overlayView = container
         try {
-            wm.addView(overlayView, params)
+            wm.addView(container, params)
             attached = true
+            Log.i(TAG, "window attached")
         } catch (e: Exception) {
             // Permission revoked between the check and here, or an OEM window policy.
             // Report and exit rather than leaving a half-created service.
@@ -302,14 +325,13 @@ class FloatingOverlayService : Service() {
      */
     private fun setCollapsed(collapse: Boolean) {
         if (!attached || collapsed == collapse) return
-        val current = overlayView ?: return
-        val next: View = if (collapse) bubble.root else binding.root
-
-        wm.removeView(current)
-        overlayView = next
         collapsed = collapse
+        // Visibility only: no window is detached or attached, so a tap cannot throw
+        // a window error. (A `BadTokenException` here would crash the app, not just
+        // the player.)
+        binding.root.visibility = if (collapse) View.GONE else View.VISIBLE
+        bubble.root.visibility = if (collapse) View.VISIBLE else View.GONE
         if (collapse) updateBubble() else updatePlayPause()
-        wm.addView(next, params)
     }
 
     private fun setupBubble() {
@@ -344,6 +366,11 @@ class FloatingOverlayService : Service() {
                     initTouchX = event.rawX
                     initTouchY = event.rawY
                     dragged = false
+                    // Clamp the *start* too: the stored position can be off-screen if
+                    // the device was rotated or the window was resized while it sat
+                    // at an edge, which would leave the player unreachable.
+                    params.x = params.x.coerceIn(0, maxX())
+                    params.y = params.y.coerceIn(0, maxY())
                     true
                 }
 
@@ -359,7 +386,9 @@ class FloatingOverlayService : Service() {
                     // itself, and with no way back.
                     params.x = (initX + dx.toInt()).coerceIn(0, maxX())
                     params.y = (initY + dy.toInt()).coerceIn(0, maxY())
-                    if (attached) wm.updateViewLayout(overlayView, params)
+                    // Called on every touch move; a throw here would kill the app
+                    // mid-drag.
+                    if (attached) runCatching { wm.updateViewLayout(overlayView, params) }
                     true
                 }
 
@@ -367,8 +396,8 @@ class FloatingOverlayService : Service() {
                     // A tap, not a drag: the collapsed bubble expands. Handled here
                     // because ACTION_DOWN was consumed above, so an OnClickListener
                     // on the same view would never be invoked.
-                    if (!dragged && collapsed) setCollapsed(false)
-                    v.performClick()
+                    if (!dragged && collapsed) runCatching { setCollapsed(false) }
+                    runCatching { v.performClick() }
                     true
                 }
 
@@ -385,6 +414,9 @@ class FloatingOverlayService : Service() {
     // ── Buttons ──────────────────────────────────────────────────────────
 
     private fun setupButtons() {
+        // Each handler is guarded: a throw in a click listener on the main thread of
+        // a service takes the process down, so a bad state would present as "the app
+        // crashes when I touch the player".
         binding.btnPlayPause.setOnClickListener {
             val svc = speechService ?: return@setOnClickListener
             // Resume only when there is something to resume; otherwise the tap
@@ -432,7 +464,10 @@ class FloatingOverlayService : Service() {
     private fun startTicker() {
         ticker.post(object : Runnable {
             override fun run() {
-                updatePlayPause()
+                // Guarded: this runs on the main thread every TICK_MS, so a single
+                // throw would repeat forever and crash the app in a loop rather than
+                // once.
+                runCatching { updatePlayPause() }
                 ticker.postDelayed(this, TICK_MS)
             }
         })

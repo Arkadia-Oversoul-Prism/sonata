@@ -14,6 +14,7 @@ import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
 import android.provider.Settings
+import android.util.Log
 import android.view.View
 import android.view.inputmethod.InputMethodManager
 import android.widget.AdapterView
@@ -380,10 +381,19 @@ class MainActivity : AppCompatActivity() {
             putExtra(FloatingOverlayService.EXTRA_PREVIEW, preview)
         }
         // startForegroundService, not startService: the overlay is a foreground
-        // service now, and Android requires the start to say so. Calling
-        // startService on it throws from the background, which is where this runs
-        // as soon as the activity is being put away.
-        ContextCompat.startForegroundService(this, intent)
+        // service now, and Android requires the start to say so.
+        //
+        // Wrapped because a throw here used to take the whole app down: Android
+        // throws ForegroundServiceStartNotAllowedException when the app is not
+        // allowed to start a foreground service, and crashing on the button the user
+        // just pressed is the worst possible answer. Saying why is a usable one.
+        try {
+            ContextCompat.startForegroundService(this, intent)
+        } catch (e: Exception) {
+            Log.w(TAG, "could not start the floating player: ${e.message}")
+            showNotice(getString(R.string.overlay_failed))
+            return
+        }
 
         // Deliberately *not* moveTaskToBack. Sending the app away immediately meant
         // that if the overlay failed to attach the user was left staring at their
@@ -618,6 +628,8 @@ class MainActivity : AppCompatActivity() {
     }
 
     private companion object {
+        const val TAG = "SonataMain"
+
         /** Used only for the "about N minutes" estimate on the count line. */
         const val WORDS_PER_MINUTE = 150
 
