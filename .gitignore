@@ -14,3 +14,6 @@ app/release/
 # Per-module Gradle/Android build output (the root /build rule above does not
 # cover app/build, so build artifacts were stageable).
 /app/build/
+
+# Agent working notes (local scratch; not part of the product).
+.openhands/

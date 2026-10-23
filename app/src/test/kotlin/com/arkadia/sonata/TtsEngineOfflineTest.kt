@@ -269,3 +269,73 @@ class TtsEngineOfflineTest {
         assertTrue("a superseded utterance must not start", h.offline.utterances.isEmpty())
     }
 }
+
+/**
+ * Progress after a mid-passage fallback.
+ *
+ * When online synthesis fails part-way, the offline voice takes over the *remainder*
+ * of the passage. The remainder is a different string from the passage, so measuring
+ * progress against it makes the bar reset to zero and never reach the end — the user
+ * sees the read restart even though the audio is continuous.
+ */
+class TtsEngineFallbackProgressTest {
+
+    @get:Rule
+    val temp = TemporaryFolder()
+
+    private class Harness(val engine: TtsEngine, val player: FakeAudioPlayer)
+
+    /** The first piece succeeds and plays; the second fails, so the fallback starts part-way in. */
+    private fun engine(scope: TestScope, transport: FakeTransport): Harness {
+        val settings = FakeSettings(backendUrl = "https://example.test", preferOnline = true)
+        val player = FakeAudioPlayer()
+        val engine = TtsEngine(
+            settings = settings,
+            cacheDir = temp.newFolder("cache"),
+            transport = transport,
+            player = player,
+            offline = FakeOfflineVoice(ready = true),
+            scope = scope,
+            mainDispatcher = StandardTestDispatcher(scope.testScheduler),
+            prefetchDepth = 0,
+        )
+        return Harness(engine, player)
+    }
+
+    @Test
+    fun `progress after a mid-passage fallback continues from where the audio got to`() = runTest {
+        val ok = SynthesisResult.Success(ByteArray(64) { 1 }, "audio/mpeg", "edge_tts")
+        // Piece 1 succeeds, piece 2 fails, the rest would succeed. This is the shape
+        // that exposes the bug: the offline voice takes over the remainder, which is a
+        // different string from the passage.
+        val transport = FakeTransport(
+            sequence = listOf(ok, SynthesisResult.Failure("boom")),
+        )
+        val h = engine(this, transport)
+
+        val passage = (1..400).joinToString(" ") { "sentence$it" }
+        h.engine.speak(passage)
+        advanceUntilIdle()
+
+        // Piece 1 is playing. Finish it, exactly as the platform player would, so the
+        // engine reaches for piece 2 — which fails and triggers the fallback.
+        assertTrue("the first piece should be playing", h.player.playing)
+        h.player.complete()
+        advanceUntilIdle()
+
+        // The offline voice has taken over the remainder, which begins part-way
+        // through the passage.
+        assertEquals(TtsEngineKind.OFFLINE, h.engine.currentEngine)
+        assertEquals("progress is measured against the passage", passage.length, h.engine.totalChars)
+        assertTrue(
+            "progress must not jump back to zero when the offline voice takes over " +
+                "(spokenChars=${h.engine.spokenChars}, first piece was " +
+                "${transport.requests.first().first.length} chars)",
+            h.engine.spokenChars > 0,
+        )
+        assertTrue(
+            "progress must never exceed the passage",
+            h.engine.spokenChars <= h.engine.totalChars,
+        )
+    }
+}

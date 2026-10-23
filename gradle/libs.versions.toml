@@ -10,6 +10,7 @@ coroutines       = "1.7.3"
 okhttp           = "4.12.0"
 media            = "1.7.0"
 junit            = "4.13.2"
+robolectric      = "4.11.1"
 androidxTestRunner = "1.5.2"
 androidxTestRules = "1.5.0"
 androidxTestExt  = "1.1.5"
@@ -27,6 +28,7 @@ kotlinx-coroutines-android = { group = "org.jetbrains.kotlinx",     name = "kotl
 okhttp                     = { group = "com.squareup.okhttp3",       name = "okhttp",                  version.ref = "okhttp" }
 androidx-media             = { group = "androidx.media",             name = "media",                   version.ref = "media" }
 junit                      = { group = "junit",                      name = "junit",                   version.ref = "junit" }
+robolectric                = { group = "org.robolectric",           name = "robolectric",             version.ref = "robolectric" }
 kotlinx-coroutines-test    = { group = "org.jetbrains.kotlinx",     name = "kotlinx-coroutines-test",  version.ref = "coroutinesTest" }
 androidx-test-runner       = { group = "androidx.test",              name = "runner",                   version.ref = "androidxTestRunner" }
 androidx-test-rules        = { group = "androidx.test",              name = "rules",                    version.ref = "androidxTestRules" }

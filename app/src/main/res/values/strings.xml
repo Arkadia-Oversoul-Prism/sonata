@@ -6,6 +6,44 @@
     <string name="action_pause">Pause</string>
     <string name="action_resume">Resume</string>
     <string name="action_stop">Stop</string>
+    <string name="action_carry_on">Carry on</string>
+    <string name="action_carry_on_from">Carry on from %1$d%%</string>
     <string name="channel_playback">Sonata Playback</string>
     <string name="overlay_permission_prompt">Grant \'Display over other apps\' for the floating player</string>
+    <string name="overlay_started">Floating player on — switch to another app to use it</string>
+    <string name="overlay_failed">Could not open the floating player. Playback continues in the notification.</string>
+
+    <!-- ── Reading screen ─────────────────────────────────────────────────── -->
+
+    <string name="state_ready">Ready</string>
+    <string name="state_preparing">Preparing…</string>
+    <string name="state_starting">Starting…</string>
+    <string name="state_speaking">Speaking</string>
+    <string name="state_buffering">Buffering</string>
+    <string name="state_paused">Paused</string>
+    <string name="substate_ready">Paste text, or select some in any app</string>
+
+    <string name="hint_passage">Paste or type anything to hear it</string>
+    <string name="hint_handoff">To read text from another app: select it, open the ⋮ menu, and choose Sonata.</string>
+
+    <string name="action_read">Read aloud</string>
+    <string name="action_read_again">Read again</string>
+    <string name="action_more">More options</string>
+    <string name="action_float">Float over other apps</string>
+    <string name="action_paste">Paste</string>
+    <string name="action_clear">Clear</string>
+    <string name="action_collapse">Collapse to bubble</string>
+    <string name="action_expand">Expand the player</string>
+    <string name="action_close">Close the floating player</string>
+
+    <string name="label_voice">Voice</string>
+    <string name="label_speed">Speed</string>
+    <string name="label_pitch">Pitch (device voice only)</string>
+    <string name="speed_default">1.0×</string>
+
+    <string name="section_playback">Playback</string>
+    <string name="section_storage">Storage</string>
+
+    <string name="empty_passage">Nothing to read — paste or type some text</string>
+    <string name="clipboard_empty">Nothing to paste — the clipboard is empty</string>
 </resources>

@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The reading surface: the passage itself, deliberately without a border so it
+     reads as text on the page rather than as a field in a form. -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+    <solid android:color="@color/bg_card" />
+    <corners android:radius="@dimen/radius_lg" />
+</shape>
