@@ -205,7 +205,10 @@ class TtsEngine(
     /** Characters spoken so far, for an approximate progress read. */
     val spokenChars: Int
         get() = when (val current = state) {
-            is PlaybackState.Offline -> current.charOffset
+            // Measured against the passage, not the chunk: after a mid-passage
+            // fallback the chunk is the remainder, and reporting its offset would
+            // make the bar jump backwards.
+            is PlaybackState.Offline -> current.originInPassage + current.charOffset
             is PlaybackState.Online -> segments.getOrNull(playIndex)?.startChar ?: 0
             PlaybackState.Idle -> 0
         }
@@ -327,7 +330,12 @@ class TtsEngine(
                 val from = current.charOffset
                 state = current.copy(paused = false)
                 listener?.onResumed(TtsEngineKind.OFFLINE)
-                speakOffline(current.text, fromChar = from, reportedFallback = null)
+                speakOffline(
+                    current.text,
+                    fromChar = from,
+                    reportedFallback = null,
+                    originInPassage = current.originInPassage,
+                )
             }
 
             PlaybackState.Idle -> listener?.onError("Nothing to resume", null)
@@ -656,6 +664,10 @@ class TtsEngine(
         val remaining = segments.drop(fromIndex).joinToString("") { it.text }
             .ifBlank { fullText }
 
+        // Captured before `segments` is cleared below: this is where the remainder
+        // begins in the passage, and progress is reported against the passage.
+        val remainderOrigin = segments.getOrNull(fromIndex)?.startChar ?: 0
+
         fetchJobs.values.forEach { it.cancel() }
         fetchJobs.clear()
         staged.values.forEach { it.delete() }
@@ -682,7 +694,14 @@ class TtsEngine(
                 // for the neural voice and is about to hear the platform one, so a
                 // silent substitution would misrepresent what is being spoken.
                 listener?.onError(reason, TtsEngineKind.OFFLINE)
-                startOfflineUtterance(remaining, fromChar = 0, reportedFallback = null)
+                // The remainder starts where the failing piece started, so progress
+                // continues to be measured against the passage the user offered.
+                startOfflineUtterance(
+                    text = remaining,
+                    fromChar = 0,
+                    reportedFallback = null,
+                    originInPassage = remainderOrigin,
+                )
             },
         )
     }
@@ -720,7 +739,12 @@ class TtsEngine(
      * The state is committed before [OfflineVoice.speak] so the progress callback
      * has a state to update, and is rolled back if the utterance fails to start.
      */
-    private fun speakOffline(text: String, fromChar: Int, reportedFallback: String?) {
+    private fun speakOffline(
+        text: String,
+        fromChar: Int,
+        reportedFallback: String?,
+        originInPassage: Int = 0,
+    ) {
         whenOfflineReady(
             onUnavailable = {
                 state = PlaybackState.Idle
@@ -730,7 +754,9 @@ class TtsEngine(
                     null,
                 )
             },
-            action = { startOfflineUtterance(text, fromChar, reportedFallback) },
+            action = {
+                startOfflineUtterance(text, fromChar, reportedFallback, originInPassage)
+            },
         )
     }
 
@@ -759,9 +785,18 @@ class TtsEngine(
         inFlight = job
     }
 
-    private fun startOfflineUtterance(text: String, fromChar: Int, reportedFallback: String?) {
-
-        state = PlaybackState.Offline(text = text, charOffset = fromChar, paused = false)
+    private fun startOfflineUtterance(
+        text: String,
+        fromChar: Int,
+        reportedFallback: String?,
+        originInPassage: Int = 0,
+    ) {
+        state = PlaybackState.Offline(
+            text = text,
+            charOffset = fromChar,
+            paused = false,
+            originInPassage = originInPassage,
+        )
         acceptingProgress = true
         var started = false
 

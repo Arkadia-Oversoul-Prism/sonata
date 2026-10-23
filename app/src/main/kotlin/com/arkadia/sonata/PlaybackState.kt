@@ -39,6 +39,16 @@ sealed class PlaybackState {
         val text: String,
         val charOffset: Int,
         val paused: Boolean,
+        /**
+         * Where [text] begins in the passage the user is reading.
+         *
+         * Without this, progress is measured against whatever chunk happens to be
+         * playing. That is invisible for a read that starts at the top, but after a
+         * mid-passage fallback to the offline voice the remainder is a different
+         * string from the passage — the bar would reset to zero and could never
+         * reach the end. Kept here so progress is always against the whole passage.
+         */
+        val originInPassage: Int = 0,
     ) : PlaybackState() {
         override val engine: TtsEngineKind = TtsEngineKind.OFFLINE
     }
