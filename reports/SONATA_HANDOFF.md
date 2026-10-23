@@ -203,7 +203,9 @@ still no second screen. New in this run:
 | APK manifest verified | `foregroundServiceType=0x40000000` (specialUse), subtype property present, `FOREGROUND_SERVICE_SPECIAL_USE` present — read back from the built APK, not the source |
 | CI (per-commit, all green) | `05e3ee1b`, `b93d2e0f`, `55c732f`, `28515d2`, `aac7311`, `d68d38a1`, `fa66ca4`, `9cf0205`, `c85df07`, `17571c2`, `9b1217d` |
 | CI run for `55c732f` | [39732542990](https://github.com/Arkadia-Oversoul-Prism/sonata/actions/runs/39732542990) — success |
-| Installable debug APK | [artifact 12405671869](https://github.com/Arkadia-Oversoul-Prism/sonata/actions/runs/39732542990/artifacts/12405671869) (`Sonata-debug-installable-55c732fa…`) |
+| CI run for the round-two tip `f1844ed4` | [39910367894](https://github.com/Arkadia-Oversoul-Prism/sonata/actions/runs/39910367894) — success |
+| Installable debug APK (round two tip) | [artifact 12481809379](https://github.com/Arkadia-Oversoul-Prism/sonata/actions/runs/39910367894/artifacts/12481809379) (`Sonata-debug-installable-f1844ed4…`, 5.5 MB) — **this is the one to install** |
+| Installable debug APK (round one) | [artifact 12405671869](https://github.com/Arkadia-Oversoul-Prism/sonata/actions/runs/39732542990/artifacts/12405671869) — superseded; the read hops and the float fails |
 | Unit-test report | [artifact 12405671873](https://github.com/Arkadia-Oversoul-Prism/sonata/actions/runs/39732542990/artifacts/12405671873) |
 | Handoff previous run | `reports/SONATA_HANDOFF_2026-10-22_single-screen.md` |
 
