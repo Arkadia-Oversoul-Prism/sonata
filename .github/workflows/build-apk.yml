@@ -35,6 +35,14 @@ jobs:
       - name: Run unit tests
         run: ./gradlew testDebugUnitTest --no-daemon
 
+      # Lint is a gate, not advice. Running it by hand in the last session found
+      # two real defects that reading the code had missed: an API-30 call on a
+      # minSdk-29 app (the overlay would have crashed when dragged on Android 10),
+      # and every icon tint written as android:tint, which AppCompat ImageView
+      # does not reliably honour.
+      - name: Lint
+        run: ./gradlew lintDebug --no-daemon
+
       - name: Build Release APK (unsigned)
         run: ./gradlew assembleRelease --no-daemon
 
