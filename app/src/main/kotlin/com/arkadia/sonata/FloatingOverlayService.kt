@@ -10,6 +10,7 @@ import android.content.Intent
 import android.content.ServiceConnection
 import android.graphics.PixelFormat
 import android.os.Handler
+import android.os.Build
 import android.os.IBinder
 import android.os.Looper
 import android.provider.Settings
@@ -262,18 +263,30 @@ class FloatingOverlayService : Service() {
     }
 
     /** The largest x that still leaves the window fully on screen. */
-    private fun maxX(): Int {
-        val bounds = wm.currentWindowMetrics.bounds
-        val width = overlayView?.width ?: 0
-        return (bounds.width() - width).coerceAtLeast(0)
-    }
+    private fun maxX(): Int = (screenWidth() - (overlayView?.width ?: 0)).coerceAtLeast(0)
 
     /** The largest y that still leaves the window fully on screen. */
-    private fun maxY(): Int {
+    private fun maxY(): Int = (screenHeight() - (overlayView?.height ?: 0)).coerceAtLeast(0)
+
+    /**
+     * Screen size in pixels.
+     *
+     * `WindowMetrics` is API 30, but this app supports 29, so the deprecated display
+     * path is still needed. Using the newer call unguarded would crash on 29 — an
+     * overlay that dies the moment it is dragged.
+     */
+    @Suppress("DEPRECATION")
+    private fun screenSize(): Pair<Int, Int> = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
         val bounds = wm.currentWindowMetrics.bounds
-        val height = overlayView?.height ?: 0
-        return (bounds.height() - height).coerceAtLeast(0)
+        bounds.width() to bounds.height()
+    } else {
+        val metrics = resources.displayMetrics
+        metrics.widthPixels to metrics.heightPixels
     }
+
+    private fun screenWidth(): Int = screenSize().first
+
+    private fun screenHeight(): Int = screenSize().second
 
     /** Truncated preview text, with the ellipsis only when something was cut. */
     private fun preview(text: String): String {

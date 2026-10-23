@@ -7,7 +7,8 @@
   ACTION_DOWN and that suppresses the framework's click detection — which is why a
   collapsed player could never be reopened.
 -->
-<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+<FrameLayout xmlns:app="http://schemas.android.com/apk/res-auto"
+    xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="wrap_content"
     android:layout_height="wrap_content"
     android:padding="@dimen/space_xs">
@@ -19,7 +20,7 @@
         android:padding="16dp"
         android:src="@drawable/ic_wave"
         android:background="@drawable/bg_play_btn"
-        android:tint="@color/bg_dark"
+        app:tint="@color/bg_dark"
         android:elevation="8dp"
         android:contentDescription="@string/action_expand" />
 </FrameLayout>

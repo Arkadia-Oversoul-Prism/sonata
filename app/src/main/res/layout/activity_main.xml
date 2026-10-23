@@ -52,7 +52,7 @@
                     android:layout_width="20dp"
                     android:layout_height="20dp"
                     android:src="@drawable/ic_wave"
-                    android:tint="@color/accent_teal"
+                    app:tint="@color/accent_teal"
                     android:importantForAccessibility="no" />
 
                 <TextView

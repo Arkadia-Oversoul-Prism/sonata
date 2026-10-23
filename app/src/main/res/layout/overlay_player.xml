@@ -39,7 +39,7 @@
                 android:layout_width="14dp"
                 android:layout_height="14dp"
                 android:src="@drawable/ic_wave"
-                android:tint="@color/accent_teal"
+                app:tint="@color/accent_teal"
                 android:importantForAccessibility="no" />
 
             <TextView
@@ -60,7 +60,7 @@
                 android:layout_height="@dimen/touch_min"
                 android:src="@drawable/ic_collapse"
                 android:background="?attr/selectableItemBackgroundBorderless"
-                android:tint="@color/text_secondary"
+                app:tint="@color/text_secondary"
                 android:scaleType="centerInside"
                 android:contentDescription="@string/action_collapse" />
 
@@ -70,7 +70,7 @@
                 android:layout_height="@dimen/touch_min"
                 android:src="@drawable/ic_close"
                 android:background="?attr/selectableItemBackgroundBorderless"
-                android:tint="@color/text_dim"
+                app:tint="@color/text_dim"
                 android:scaleType="centerInside"
                 android:contentDescription="@string/action_close" />
         </LinearLayout>
@@ -101,7 +101,7 @@
                 android:layout_height="@dimen/touch_min"
                 android:src="@drawable/ic_pause"
                 android:background="@drawable/bg_play_btn"
-                android:tint="@color/bg_dark"
+                app:tint="@color/bg_dark"
                 android:scaleType="centerInside"
                 android:contentDescription="@string/action_pause" />
 
@@ -112,7 +112,7 @@
                 android:layout_marginStart="@dimen/space_xs"
                 android:src="@drawable/ic_stop"
                 android:background="?attr/selectableItemBackgroundBorderless"
-                android:tint="@color/text_secondary"
+                app:tint="@color/text_secondary"
                 android:scaleType="centerInside"
                 android:contentDescription="@string/action_stop" />
 
