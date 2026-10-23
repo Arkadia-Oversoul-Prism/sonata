@@ -678,6 +678,63 @@ class TtsEngineOnlineTest {
         assertEquals(1, h.listener.starts.size)
     }
 
+    // ── Prefetch must not cut off what is playing ────────────────────────────
+
+    /**
+     * The production prefetch depth.
+     *
+     * Every other test in this file runs at depth 0, which makes the read strictly
+     * sequential and therefore *cannot* observe the failure this pins: at depth 1 the
+     * next piece is synthesised while the current one plays, and an engine that
+     * advances whenever a later piece becomes available cuts the current piece off
+     * mid-sentence and hops forward.
+     */
+    @Test
+    fun `a prefetched piece does not interrupt the piece playing`() = runTest {
+        val h = harness(this, prefetchDepth = 1)
+        val long = buildString { repeat(2000) { append("word$it ") } }
+        h.engine.speak(long)
+        advanceUntilIdle()
+
+        // The first piece is playing, and the second was fetched during it.
+        assertEquals("only the first piece may have started", 1, h.player.playCalls)
+        assertTrue("the first piece must be playing", h.engine.isPlaying)
+        assertTrue("a second piece must have been prefetched", h.transport.requests.size >= 2)
+
+        // Let the first piece finish. Only now may the second start.
+        h.player.complete()
+        advanceUntilIdle()
+        assertEquals("the second piece starts when the first ends", 2, h.player.playCalls)
+    }
+
+    @Test
+    fun `every piece is heard in order at the production prefetch depth`() = runTest {
+        val h = harness(this, prefetchDepth = 1)
+        val long = buildString { repeat(2000) { append("word$it ") } }
+        h.engine.speak(long)
+        advanceUntilIdle()
+
+        // Drive the read to completion by ending each piece in turn, and assert the
+        // pieces were requested and played in the passage's order. A read that hops
+        // forward plays fewer pieces than it requests.
+        val played = mutableListOf<String>()
+        var guard = 0
+        while (h.engine.isPlaying && guard++ < 40) {
+            val before = h.player.playCalls
+            h.player.complete()
+            advanceUntilIdle()
+            if (h.player.playCalls > before) played += "piece${h.player.playCalls}"
+        }
+
+        assertEquals(
+            "a prefetched read must play every piece it fetched, in order",
+            h.transport.requests.size,
+            h.player.playCalls,
+        )
+        // And the requests, in order, are the passage.
+        assertEquals(long.trim(), h.transport.requests.joinToString("") { it.first })
+    }
+
     // ── Engine selection ──────────────────────────────────────────────────────
 
     @Test

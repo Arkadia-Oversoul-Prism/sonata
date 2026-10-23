@@ -165,6 +165,18 @@ class TtsEngine(
     private var awaitingNext = false
 
     /**
+     * True while a piece is actually in the player.
+     *
+     * [advanceIfPossible] must never start a piece while one is playing. With
+     * prefetching enabled the next piece is synthesised *during* the current one, so
+     * "the next piece is available" is the normal condition rather than a signal that
+     * the current one has ended. Advancing on availability alone cut every piece off
+     * mid-sentence and hopped forward through the passage — the read "jumped the
+     * text" and made no sense.
+     */
+    private var playingSegment = false
+
+    /**
      * The tier already announced through [Listener.onStart]. Segmentation means
      * several pieces play in one logical utterance, so the start is reported once
      * for the read rather than once per piece.
@@ -247,6 +259,7 @@ class TtsEngine(
                 // no-op the user could not distinguish from a failure.
                 val paused = if (awaitingNext) true else player.pause()
                 if (paused) {
+                    playingSegment = false
                     state = current.copy(positionMs = player.currentPositionMs(), paused = true)
                     listener?.onPaused(TtsEngineKind.ONLINE)
                 }
@@ -273,17 +286,18 @@ class TtsEngine(
         when (val current = state) {
             is PlaybackState.Online -> {
                 if (!current.paused) return
-                if (awaitingNext) {
-                    // Paused between pieces: nothing to resume in the player, so
-                    // clear the pause and let the pending piece play.
-                    state = current.copy(paused = false)
-                    listener?.onResumed(TtsEngineKind.ONLINE)
-                    advanceIfPossible()
-                } else if (player.resume()) {
-                    state = current.copy(paused = false)
-                    listener?.onResumed(TtsEngineKind.ONLINE)
+                state = current.copy(paused = false)
+                listener?.onResumed(TtsEngineKind.ONLINE)
+
+                // The player is the authority on whether a stream was paused
+                // mid-piece. A read paused *between* pieces has nothing to resume, so
+                // ask the player first and fall through to starting the next piece.
+                // (Deciding this from a bookkeeping flag went wrong as soon as the
+                // flag and the player could disagree.)
+                if (player.resume()) {
+                    playingSegment = true
                 } else {
-                    listener?.onError("Could not resume audio", null)
+                    advanceIfPossible()
                 }
             }
 
@@ -345,6 +359,7 @@ class TtsEngine(
         onlineUrl = ""
         playIndex = -1
         awaitingNext = false
+        playingSegment = false
         reportedEngine = null
     }
 
@@ -387,6 +402,7 @@ class TtsEngine(
         segments = planSegments(text)
         playIndex = -1
         awaitingNext = false
+        playingSegment = false
         schedulePrefetch()
     }
 
@@ -514,6 +530,15 @@ class TtsEngine(
         // never stall waiting for a piece nobody asked for.
         schedulePrefetch()
 
+        // A piece is in the player: the next one is ready (that is the whole point of
+        // prefetching) but the user is still listening to this one. Starting it here
+        // would cut the current piece off mid-sentence.
+        if (playingSegment) return
+
+        // Paused between pieces: the pending piece must wait for [resume].
+        val current = state
+        if (current is PlaybackState.Online && current.paused) return
+
         val next = playIndex + 1
         if (next > segments.lastIndex) {
             finish()
@@ -557,6 +582,7 @@ class TtsEngine(
             return
         }
 
+        playingSegment = true
         state = PlaybackState.Online(text = fullText, positionMs = 0, paused = false)
         if (reportedEngine != TtsEngineKind.ONLINE) {
             reportedEngine = TtsEngineKind.ONLINE
@@ -568,6 +594,9 @@ class TtsEngine(
     private fun onSegmentFinished(index: Int) {
         currentFile?.delete()
         currentFile = null
+        // Clear before advancing: this is the one moment the next piece is allowed
+        // to start.
+        playingSegment = false
         advanceIfPossible()
     }
 
@@ -596,6 +625,7 @@ class TtsEngine(
         segments = emptyList()
         playIndex = -1
         awaitingNext = false
+        playingSegment = false
         reportedEngine = null
 
         whenOfflineReady(
@@ -618,6 +648,7 @@ class TtsEngine(
     private fun onPlaybackError(msg: String) {
         currentFile?.delete()
         currentFile = null
+        playingSegment = false
         state = PlaybackState.Idle
         listener?.onError(msg, null)
     }
@@ -625,6 +656,7 @@ class TtsEngine(
     private fun finish() {
         currentFile?.delete()
         currentFile = null
+        playingSegment = false
         staged.values.forEach { it.delete() }
         staged.clear()
         failed.clear()
