@@ -38,6 +38,59 @@ founder's call, and out of this run's authority).
 > references; `git ls-remote origin refs/heads/feat/sonata-ux-and-playback-overhaul`
 > is authoritative.
 
+## 0.000 Round four — the float crash, reproduced and fixed
+
+The round-three work was inference: every throwable path was guarded, but nothing was
+reproduced, and the crash continued. Round four found the actual cause by making the
+service runnable on the JVM and driving it.
+
+**The reproduction.** Robolectric was added as a test dependency and
+`FloatingOverlayServiceTest` constructs and starts the real service. It failed at once:
+
+```
+android.view.InflateException: Binary XML file line #23 in
+  com.arkadia.sonata.debug:layout/overlay_player: Error inflating class
+  com.google.android.material.card.MaterialCardView
+Caused by: java.lang.IllegalArgumentException: The style on this component requires
+  your app theme to be Theme.MaterialComponents (or a descendant).
+```
+
+**The cause.** The player is a `MaterialCardView` containing a `MaterialButton`, and it
+was inflated with the Service's own context. A theme reaches an Activity by default; it
+does not reach a Service. So the app's MaterialComponents theme was absent,
+MaterialComponents refused to inflate, and the exception left `onCreate` uncaught — on
+the app's main thread. The foreground notification appeared and the process died. That
+is precisely the report: *"I see it trying to pop up on my notification bar but
+immediately it just goes off and the app closes like something shut it down."*
+
+**The fix.** `ContextThemeWrapper(this, R.style.Theme_Sonata)` — the supported way to
+inflate Material components outside an Activity. Inflation is also inside the guard now,
+so an OEM theme quirk cannot take the app down either.
+
+**A second crash the test then exposed, on the same path:**
+
+```
+NullPointerException: Parameter specified as non-null is null:
+  FloatingOverlayService$conn$1.onServiceConnected
+```
+
+`ServiceConnection`'s parameters are nullable in the platform contract, and the platform
+does pass a null binder. Declaring them non-null inserted a Kotlin null check that threw
+on the main thread. They are nullable now, with a safe cast.
+
+**Why three rounds of guarding missed it.** There was no test for the overlay at all.
+Every JVM test passed because none of them constructed the service, and the manifest
+check that "verified" the round-two fix proved the *declaration* was present — not that
+the player could start. Guarding throwable paths without reproducing the failure treats
+symptoms. The lesson is recorded in `.openhands/memory/MEMORY.md`: when a defect cannot
+be reproduced, build the harness that can, rather than enumerating suspects.
+
+**What the new tests still cannot show.** Whether a window becomes visible to a user —
+Robolectric has no compositor. They are a necessary condition, not proof, and that
+distinction is kept honest in the evidence table above.
+
+---
+
 ## 0.00 Round three — the founder reports a crash on Float, playback now fine
 
 Playback works on the device. Tapping Float crashes the app.
@@ -230,7 +283,7 @@ still no second screen. New in this run:
 
 | Item | Value |
 | --- | --- |
-| Unit tests | **112 pass, 0 failures** (`./gradlew testDebugUnitTest`) |
+| Unit tests | **118 pass, 0 failures** (`./gradlew testDebugUnitTest`) — 6 of them drive the real overlay service |
 | Lint | `lintDebug` clean, and now a CI gate |
 | Instrumented tests | 21 tests compile and package; **never executed** (no device, no KVM) |
 | Debug APK | builds locally; `apksigner verify` — signed, installable |
