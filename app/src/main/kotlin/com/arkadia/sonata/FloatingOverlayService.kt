@@ -17,6 +17,7 @@ import android.provider.Settings
 import androidx.core.app.NotificationCompat
 import android.util.Log
 import android.view.Gravity
+import android.view.ContextThemeWrapper
 import android.view.LayoutInflater
 import android.view.MotionEvent
 import android.view.View
@@ -89,15 +90,24 @@ class FloatingOverlayService : Service() {
     private var lastPreview: String = ""
 
     private val conn = object : ServiceConnection {
-        override fun onServiceConnected(name: ComponentName, binder: IBinder) {
-            val svc = (binder as SpeechService.LocalBinder).getService()
+        // Both parameters are nullable on purpose. The platform declares them
+        // nullable and *does* pass a null binder when a bind fails, so declaring
+        // them non-null inserts a Kotlin null check that throws a
+        // NullPointerException on the app's main thread — another way for the
+        // player to take the whole app down.
+        override fun onServiceConnected(name: ComponentName?, binder: IBinder?) {
+            val local = binder as? SpeechService.LocalBinder ?: run {
+                Log.w(TAG, "bound to SpeechService but got an unexpected binder")
+                return
+            }
+            val svc = local.getService()
             speechService = svc
             boundToSpeech = true
             svc.addClient(client)
             updatePlayPause()
         }
 
-        override fun onServiceDisconnected(name: ComponentName) {
+        override fun onServiceDisconnected(name: ComponentName?) {
             speechService?.removeClient(client)
             speechService = null
             boundToSpeech = false
@@ -206,14 +216,38 @@ class FloatingOverlayService : Service() {
 
         wm = getSystemService(WindowManager::class.java)
 
-        val inflater = LayoutInflater.from(this)
-        binding = OverlayPlayerBinding.inflate(inflater)
-        bubble = OverlayBubbleBinding.inflate(inflater)
+        // Inflate under an explicit MaterialComponents theme.
+        //
+        // This was the crash. The player is built from a MaterialCardView and a
+        // MaterialButton, and a Service's own context does not carry the app's
+        // MaterialComponents theme — a theme only reaches an Activity by default. So
+        // inflation threw
+        //
+        //   IllegalArgumentException: The style on this component requires your app
+        //   theme to be Theme.MaterialComponents (or a descendant)
+        //
+        // out of onCreate, uncaught, on the app's main thread. That is exactly the
+        // reported symptom: the foreground notification appeared and the whole app
+        // closed immediately. A themed wrapper is the supported way to inflate
+        // Material components outside an Activity.
+        val themed = ContextThemeWrapper(this, R.style.Theme_Sonata)
+        val inflater = LayoutInflater.from(themed)
 
-        setupDrag(binding.root)
-        setupDrag(bubble.root)
-        setupButtons()
-        setupBubble()
+        // Inflation is also inside the guard: whatever else it throws for on some OEM
+        // theme, a failure to build the player must not take the app down.
+        try {
+            binding = OverlayPlayerBinding.inflate(inflater)
+            bubble = OverlayBubbleBinding.inflate(inflater)
+
+            setupDrag(binding.root)
+            setupDrag(bubble.root)
+            setupButtons()
+            setupBubble()
+        } catch (e: Exception) {
+            Log.e(TAG, "could not build the floating player", e)
+            closeDown()
+            return
+        }
 
         // Both states live in the window from the start; collapsing only toggles
         // which is visible. Swapping them by removeView/addView meant two window
@@ -476,6 +510,30 @@ class FloatingOverlayService : Service() {
     private fun stopTicker() {
         ticker.removeCallbacksAndMessages(null)
     }
+
+    // ── Test seams ────────────────────────────────────────────────────────
+
+    /**
+     * Whether a window is currently attached.
+     *
+     * The overlay has failed on a real device while every JVM test passed, so the
+     * service is now driven from tests. These expose state rather than behaviour:
+     * they cannot make the tests pass by themselves.
+     */
+    @androidx.annotation.VisibleForTesting
+    internal val isAttachedForTest: Boolean get() = attached
+
+    @androidx.annotation.VisibleForTesting
+    internal val isCollapsedForTest: Boolean get() = collapsed
+
+    @androidx.annotation.VisibleForTesting
+    internal val attachedViewForTest: View? get() = overlayView
+
+    @androidx.annotation.VisibleForTesting
+    internal fun collapseForTest() = setCollapsed(true)
+
+    @androidx.annotation.VisibleForTesting
+    internal fun expandForTest() = setCollapsed(false)
 
     companion object {
         const val EXTRA_LABEL = "label"

@@ -38,6 +38,7 @@ android {
 
     testOptions {
         unitTests {
+            isIncludeAndroidResources = true
             // android.util.Log is a stub on the JVM; returning defaults lets the
             // engine's logic be tested without Robolectric. This does not make any
             // Android framework *behaviour* available — the tests exercise the
@@ -71,6 +72,12 @@ dependencies {
     // or Robolectric is required.
     testImplementation(libs.junit)
     testImplementation(libs.kotlinx.coroutines.test)
+    // Robolectric runs Android framework code on the JVM. It is here to reproduce
+    // device-only failures — the overlay service in particular, which has crashed
+    // on the founder's device three times while every JVM test passed. Without it
+    // the only way to test a Service is to have a device.
+    testImplementation(libs.robolectric)
+    testImplementation(libs.androidx.test.ext.junit)
 
     // Instrumented tests run on a device/emulator. They are the only surface that
     // can exercise the real platform TextToSpeech engine and the real OkHttp
