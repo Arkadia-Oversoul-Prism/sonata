@@ -38,6 +38,24 @@ founder's call, and out of this run's authority).
 > references; `git ls-remote origin refs/heads/feat/sonata-ux-and-playback-overhaul`
 > is authoritative.
 
+## 0.0000 Round five — both confirmed working on the device
+
+The founder tested the round-four build on hardware: **playback works and the floating
+player opens.** That closes the three defects that dominated rounds two to four:
+
+| Reported | Status |
+| --- | --- |
+| Speech did not begin immediately | Fixed (round one: segmented pipeline) |
+| Long passages truncated | Fixed (round one: chunked planning, `TextLimits`) |
+| Read jumped the text / no sense | Fixed (round two: prefetch cut off playing audio) |
+| Floating player did not open or float | **Fixed (round four: Service context carried no theme)** |
+
+The float fix is now device-verified, not just JVM-verified. The one thing the
+Robolectric tests could not show — whether a window actually becomes visible — is
+confirmed by the person looking at the screen.
+
+---
+
 ## 0.000 Round four — the float crash, reproduced and fixed
 
 The round-three work was inference: every throwable path was guarded, but nothing was
@@ -317,14 +335,12 @@ unsigned and therefore not installable; it is a build product for inspection.
 - That speech now *audibly* begins in about a second. The latency figures above are
   backend measurements plus the design of the new path; the perceived improvement has
   not been heard on hardware.
-- That the floating player opens, drags, collapses and expands, and survives the app
-  being backgrounded. Seven defects are fixed and the APK's manifest is verified, but
-  the overlay has never run on a device in this environment — and the last device
-  report was that it did not work at all, so this needs confirming rather than
-  assuming.
-- That the read now plays every piece in order *audibly*. The regression is pinned by
-  tests at the production prefetch depth, which is strong evidence, but it has not
-  been heard on hardware.
+- That the floating player survives *heavy* use — long drags, rapid collapse/expand,
+  rotation while it is open, and low-memory pressure. It opens and floats on device,
+  which was the reported defect, but the edges have not been exercised.
+- That the read plays every piece in order over a *very* long passage. Ordering is
+  pinned by tests at the production prefetch depth and the founder confirms playback
+  works, but a full 20,000-character run has not been listened to end to end.
 - That the redesigned screen looks right at real densities and font scales.
 - The instrumented suite (21 tests) has never executed.
 
