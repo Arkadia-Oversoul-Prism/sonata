@@ -13,6 +13,7 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
+import android.os.SystemClock
 import android.provider.Settings
 import android.util.Log
 import android.view.View
@@ -52,6 +53,11 @@ class MainActivity : AppCompatActivity() {
     private val ticker = Handler(Looper.getMainLooper())
     private var tickerRunning = false
 
+    /** The passage currently being read, as dispatched. */
+    private var readingPassage = ""
+
+    private var lastCheckpointAt = 0L
+
     private val conn = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName, binder: IBinder) {
             speechService = (binder as SpeechService.LocalBinder).getService()
@@ -77,7 +83,12 @@ class MainActivity : AppCompatActivity() {
      */
     private val uiClient = object : SpeechService.Client {
         override fun onStart() { render(); startTicker() }
-        override fun onPause() { render() }
+        override fun onPause() {
+            // The moment that matters: leaving the app. Recorded here so a return
+            // carries on even if the process is killed while backgrounded.
+            rememberProgress()
+            render()
+        }
         override fun onResume() { render(); startTicker() }
         override fun onComplete() { stopTicker(); render() }
         override fun onError(msg: String) { showNotice(msg); render() }
@@ -342,6 +353,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun stopRead() {
+        rememberProgress()
         speechService?.stop()
         stopTicker()
         render()
@@ -377,6 +389,10 @@ class MainActivity : AppCompatActivity() {
     private fun dispatch(text: String, fromChar: Int = 0) {
         clearNotice()
         rememberPassage()
+        readingPassage = text
+        // A fresh read of the same passage restarts from the top, so any stored
+        // position is no longer where the user is.
+        prefs.rememberProgress(text, fromChar)
         binding.tvState.text = getString(R.string.state_preparing)
         binding.tvSubstate.text = "Starting the voice…"
         startForegroundService(
@@ -504,6 +520,11 @@ class MainActivity : AppCompatActivity() {
                 if (!tickerRunning) return
                 render()
                 if (speechService?.isPlaying == true || speechService?.isPaused == true) {
+                    // Checkpoint the position at a human pace, not on every frame. A
+                    // SharedPreferences write allocates and schedules a disk write,
+                    // and 2.5 of those a second is pure waste — the position only
+                    // needs to be durable when the user leaves or the process dies.
+                    if (elapsedSinceCheckpoint() >= CHECKPOINT_MS) rememberProgress()
                     ticker.postDelayed(this, TICK_MS)
                 } else {
                     tickerRunning = false
@@ -511,6 +532,20 @@ class MainActivity : AppCompatActivity() {
             }
         })
     }
+
+    /** Record where the read is, so a return to this passage can carry on. */
+    private fun rememberProgress() {
+        val svc = speechService ?: return
+        // The passage actually dispatched, not the editable field: if the user edits
+        // the text mid-read, the stored offset belongs to what was read, and the
+        // "carry on" rule compares against the stored passage — so an edited field
+        // correctly stops offering a resume rather than resuming into new text.
+        prefs.rememberProgress(readingPassage, svc.spokenChars)
+        lastCheckpointAt = SystemClock.elapsedRealtime()
+    }
+
+    private fun elapsedSinceCheckpoint(): Long =
+        SystemClock.elapsedRealtime() - lastCheckpointAt
 
     private fun stopTicker() {
         tickerRunning = false
@@ -521,16 +556,6 @@ class MainActivity : AppCompatActivity() {
         val svc = speechService
         val playing = svc?.isPlaying == true
 
-        // Remember how far the read has got, so returning to a long passage offers
-        // to carry on instead of starting over. Recorded here because render() runs
-        // on every tick and on every state change, which is exactly when the
-        // position can have moved.
-        if (svc != null && (playing || svc.isPaused)) {
-            prefs.rememberProgress(
-                passage = binding.etText.text?.toString().orEmpty(),
-                spokenChars = svc.spokenChars,
-            )
-        }
         val paused = svc?.isPaused == true
         val active = playing || paused
 
@@ -701,5 +726,11 @@ class MainActivity : AppCompatActivity() {
 
         const val PROGRESS_MAX = 1000
         const val TICK_MS = 400L
+
+        /**
+         * How often the reading position is written down during playback. Coarse on
+         * purpose: the value is only needed when the user leaves.
+         */
+        const val CHECKPOINT_MS = 5_000L
     }
 }
