@@ -63,3 +63,42 @@ class SpeechCommandTest {
         )
     }
 }
+
+/**
+ * The resume offset travels with the SPEAK command.
+ *
+ * A stored position that silently fails to reach the engine would look like the
+ * feature not working, with no error anywhere — so the plumbing is pinned here
+ * rather than only at the engine.
+ */
+class SpeechCommandResumeTest {
+
+    @Test
+    fun `a resolved speak carries the offset it was given`() {
+        val command = SpeechCommand.resolve(
+            action = SpeechService.ACTION_SPEAK,
+            text = "A long passage",
+            label = null,
+            fromChar = 4200,
+        )
+        assertEquals(4200, (command as SpeechCommand.Speak).fromChar)
+    }
+
+    @Test
+    fun `speak defaults to reading from the start`() {
+        val command = SpeechCommand.resolve(SpeechService.ACTION_SPEAK, "Hello", null)
+        assertEquals(0, (command as SpeechCommand.Speak).fromChar)
+    }
+
+    @Test
+    fun `a negative offset is treated as the start`() {
+        // A corrupt or stale stored value must not become a negative index.
+        val command = SpeechCommand.resolve(
+            action = SpeechService.ACTION_SPEAK,
+            text = "Hello",
+            label = null,
+            fromChar = -10,
+        )
+        assertEquals(0, (command as SpeechCommand.Speak).fromChar)
+    }
+}

@@ -21,7 +21,7 @@ import android.support.v4.media.session.PlaybackStateCompat
  * Activities and the overlay bind to it via [LocalBinder].
  *
  * Commands (via startForegroundService + intent action):
- *   ACTION_SPEAK  — extras: EXTRA_TEXT, EXTRA_LABEL
+ *   ACTION_SPEAK  — extras: EXTRA_TEXT, EXTRA_LABEL, EXTRA_FROM_CHAR
  *   ACTION_PAUSE
  *   ACTION_RESUME
  *   ACTION_STOP
@@ -104,7 +104,7 @@ class SpeechService : Service() {
                 lastError     = null
                 fellBackOffline = false
                 promoteToForeground(playing = true)
-                tts.speak(command.text)
+                tts.speakFrom(command.text, command.fromChar)
             }
 
             SpeechCommand.Pause  -> { tts.pause();  updateNotification(playing = false) }
@@ -335,5 +335,7 @@ class SpeechService : Service() {
         const val ACTION_STOP   = "com.arkadia.sonata.STOP"
         const val EXTRA_TEXT    = "text"
         const val EXTRA_LABEL   = "label"
+        /** Character offset to begin reading from; 0 (the default) reads it all. */
+        const val EXTRA_FROM_CHAR = "fromChar"
     }
 }

@@ -94,6 +94,79 @@ class TtsEngineOnlineTest {
         }
     }
 
+    // ── Resuming where the user stopped ───────────────────────────────────────
+
+    /**
+     * A long passage must be resumable, and the resume must not skip or repeat
+     * speech.
+     *
+     * The engine is the right place for the offset because it knows where each piece
+     * begins. These tests pin the two ways that could go wrong: starting at the
+     * wrong piece, and losing text at the seam.
+     */
+    @Test
+    fun `speakFrom starts at the piece containing the offset`() = runTest {
+        val h = harness(this)
+        // Long enough to be split into several pieces.
+        val text = (1..400).joinToString(" ") { "sentence$it" }
+        val offset = text.length / 2
+
+        h.engine.speakFrom(text, offset)
+        advanceUntilIdle()
+
+        val firstRequested = h.transport.requests.first().first
+        assertTrue(
+            "the read must not restart from the beginning (asked for: ${firstRequested.take(40)})",
+            !firstRequested.startsWith("sentence1 "),
+        )
+        // The first piece is the one containing the offset, so it is a slice of the
+        // passage from that piece's start — never a re-synthesis of the opening.
+        assertTrue(
+            "the first piece must come from the passage itself",
+            text.contains(firstRequested),
+        )
+    }
+
+    @Test
+    fun `speakFrom covers the whole remainder of the passage`() = runTest {
+        val h = harness(this, prefetchDepth = 1)
+        val text = (1..400).joinToString(" ") { "sentence$it" }
+        val offset = text.length / 3
+
+        h.engine.speakFrom(text, offset)
+        playThrough(h)
+
+        // Concatenating everything actually sent must be the tail of the passage:
+        // nothing before the resume point, nothing dropped after it, and nothing
+        // duplicated at a seam.
+        val spoken = h.transport.requests.joinToString("") { it.first }
+        assertTrue("something must be read", spoken.isNotEmpty())
+        assertTrue("the read must skip the part already heard", spoken.length < text.length)
+        assertTrue(
+            "the remainder must be read in order, with nothing lost at a seam",
+            text.endsWith(spoken),
+        )
+    }
+
+    @Test
+    fun `speakFrom past the end does not crash and reads nothing`() = runTest {
+        val h = harness(this)
+        h.engine.speakFrom("A short passage.", fromChar = 9999)
+        advanceUntilIdle()
+
+        val spoken = h.transport.requests.joinToString("") { it.first }
+        assertTrue("nothing before the clamp point may be spoken", spoken.isEmpty())
+    }
+
+    @Test
+    fun `speakFrom with a negative offset reads from the start`() = runTest {
+        val h = harness(this)
+        h.engine.speakFrom("Hello there", fromChar = -50)
+        advanceUntilIdle()
+
+        assertEquals("Hello there", h.transport.requests.first().first)
+    }
+
     // ── Success path ──────────────────────────────────────────────────────────
 
     @Test

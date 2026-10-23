@@ -227,7 +227,21 @@ class TtsEngine(
      * Empty or whitespace-only input is refused with a reported error rather than
      * being sent to the backend or silently ignored.
      */
-    fun speak(raw: CharSequence?) {
+    fun speak(raw: CharSequence?) = speakFrom(raw, fromChar = 0)
+
+    /**
+     * Speak [raw], starting at [fromChar].
+     *
+     * This is what makes a passage survivable across app launches: a read-aloud app
+     * is used in bursts, and coming back to a long passage and hearing it restart
+     * from the top is the difference between usable and not. The engine is the right
+     * place for the offset because it already knows where each piece begins.
+     *
+     * The offset is clamped into the text, so a stale stored position — the passage
+     * was edited shorter in the meantime — starts the read somewhere valid rather
+     * than at the end or past it.
+     */
+    fun speakFrom(raw: CharSequence?, fromChar: Int) {
         supersede()
 
         when (val validation = TextLimits.validate(raw)) {
@@ -236,11 +250,13 @@ class TtsEngine(
                 listener?.onError("Nothing to read", null)
             }
 
-            is TextValidation.Ready -> start(validation.text, truncatedFrom = null)
+            is TextValidation.Ready ->
+                start(validation.text, truncatedFrom = null, fromChar = fromChar)
 
             is TextValidation.Truncated -> start(
                 validation.text,
                 truncatedFrom = validation.originalLength,
+                fromChar = fromChar,
             )
         }
     }
@@ -363,7 +379,7 @@ class TtsEngine(
         reportedEngine = null
     }
 
-    private fun start(text: String, truncatedFrom: Int?) {
+    private fun start(text: String, truncatedFrom: Int?, fromChar: Int = 0) {
         if (truncatedFrom != null) {
             // Say what will actually be read, before reading it.
             listener?.onError(
@@ -374,10 +390,15 @@ class TtsEngine(
 
         fullText = text
         val url = settings.backendUrl.trim()
+
+        // A resume offset only makes sense inside the text. Clamping here keeps the
+        // invariant local: nothing below has to defend against a bad offset.
+        val from = fromChar.coerceIn(0, text.length)
+
         if (settings.preferOnline && url.isNotEmpty()) {
-            speakOnline(text, url)
+            speakOnline(text, url, from)
         } else {
-            speakOffline(text, fromChar = 0, reportedFallback = null)
+            speakOffline(text, fromChar = from, reportedFallback = null)
         }
     }
 
@@ -397,10 +418,31 @@ class TtsEngine(
      * exactly what the user offered. The first piece is short on purpose: its
      * synthesis is what the user waits for before hearing anything.
      */
-    private fun speakOnline(text: String, url: String) {
+    private fun speakOnline(text: String, url: String, fromChar: Int = 0) {
         onlineUrl = url
         segments = planSegments(text)
-        playIndex = -1
+
+        // Resume at a piece boundary: the first piece that still has text at or after
+        // the offset. Starting mid-piece would begin mid-word, so the read picks up
+        // from the start of the piece containing the offset — the most the user can
+        // reasonably expect, and it never skips speech.
+        //
+        // `playIndex` is the piece *playing* and advanceIfPossible starts
+        // `playIndex + 1`, so the wanted piece is reached by beginning one before it.
+        // Nothing else on the advance or prefetch path needs to know about offsets.
+        val firstToPlay = segments.indexOfFirst { it.startChar + it.text.length > fromChar }
+
+        if (firstToPlay < 0) {
+            // The offset is at or past the end: there is genuinely nothing to read.
+            // Leave nothing staged rather than reading the tail of the passage back.
+            playIndex = segments.lastIndex
+            awaitingNext = false
+            playingSegment = false
+            state = PlaybackState.Idle
+            return
+        }
+
+        playIndex = firstToPlay - 1
         awaitingNext = false
         playingSegment = false
         schedulePrefetch()

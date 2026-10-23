@@ -193,6 +193,21 @@
                     app:iconTint="@color/bg_dark"
                     app:iconPadding="@dimen/space_sm" />
 
+                <!-- Carry on: shown only when there is a stored position in this
+                     exact passage, so it is never a dead control. Reading on from
+                     where the user stopped is the whole point of keeping the
+                     passage at all; restarting from the top made returning to a
+                     long passage useless. -->
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/btnResume"
+                    style="@style/Button.Sonata.Secondary"
+                    android:layout_width="wrap_content"
+                    android:layout_height="@dimen/touch_primary"
+                    android:layout_marginStart="@dimen/space_sm"
+                    android:minWidth="0dp"
+                    android:text="@string/action_carry_on"
+                    android:visibility="gone" />
+
                 <!-- Stop: secondary, but never hidden, and never a dead control
                      (disabled until there is something to stop). -->
                 <com.google.android.material.button.MaterialButton

@@ -64,6 +64,29 @@ class Prefs(context: Context) : TtsSettings {
         get() = sp.getString(KEY_LAST_PASSAGE, "").orEmpty()
         set(v) = sp.edit().putString(KEY_LAST_PASSAGE, v).apply()
 
+    /**
+     * How far into [lastPassage] the read had got.
+     *
+     * Stored so returning to a long passage offers to carry on from where the user
+     * stopped rather than from the top — the single most annoying thing about
+     * leaving a read-aloud app and coming back.
+     *
+     * Reset to 0 whenever the passage changes, so a stale offset can never be
+     * applied to different text. The engine also clamps, but the stored value is
+     * meaningless across texts and should not survive one.
+     */
+    var lastSpokenChars: Int
+        get() = sp.getInt(KEY_LAST_SPOKEN, 0)
+        set(v) = sp.edit().putInt(KEY_LAST_SPOKEN, v).apply()
+
+    /** Record a passage and where the read is, atomically with respect to readers. */
+    fun rememberProgress(passage: String, spokenChars: Int) {
+        sp.edit()
+            .putString(KEY_LAST_PASSAGE, passage)
+            .putInt(KEY_LAST_SPOKEN, spokenChars.coerceAtLeast(0))
+            .apply()
+    }
+
     // ── TtsSettings ────────────────────────────────────────────────────────
     // The engine reads through these narrow names; the stored keys above keep
     // their original names so existing installs keep their preferences.
@@ -73,6 +96,7 @@ class Prefs(context: Context) : TtsSettings {
     override val preferOnline: Boolean get() = preferEdgeTts
 
     companion object {
+        private const val KEY_LAST_SPOKEN = "last_spoken_chars"
         private const val KEY_VOICE         = "voice"
         private const val KEY_SPEED         = "speed"
         private const val KEY_PITCH         = "pitch"

@@ -277,6 +277,7 @@ class MainActivity : AppCompatActivity() {
         binding.miniPlayPause.setOnClickListener { togglePause() }
         binding.miniFloat.setOnClickListener { floatOverlay() }
 
+        binding.btnResume.setOnClickListener { resumeRead() }
         binding.btnPaste.setOnClickListener { pasteFromClipboard() }
         binding.btnClear.setOnClickListener {
             binding.etText.setText("")
@@ -316,6 +317,30 @@ class MainActivity : AppCompatActivity() {
         render()
     }
 
+    /**
+     * Where a "carry on" would resume, or 0 when there is nothing to carry on from.
+     *
+     * Returns 0 unless the stored passage is the one on screen, so a stale offset
+     * from a different passage can never be applied. Near the end of a passage there
+     * is nothing worth resuming, so the affordance disappears rather than offering
+     * to read the last few characters.
+     */
+    private fun resumableOffset(): Int {
+        val current = binding.etText.text?.toString().orEmpty()
+        if (current.isBlank()) return 0
+        if (prefs.lastPassage != current) return 0
+        val at = prefs.lastSpokenChars
+        if (at <= 0) return 0
+        return if (at >= current.length - MIN_RESUME_CHARS) 0 else at
+    }
+
+    /** Carry on from the stored position in this passage. */
+    private fun resumeRead() {
+        val at = resumableOffset()
+        if (at <= 0) return
+        readFrom(at)
+    }
+
     private fun stopRead() {
         speechService?.stop()
         stopTicker()
@@ -323,6 +348,16 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun read() {
+        readFrom(fromChar = 0)
+    }
+
+    /**
+     * Start a read, optionally from a character offset.
+     *
+     * [fromChar] is what the "carry on" affordance passes. The engine clamps it, so
+     * a stale value cannot start a read past the end of the text.
+     */
+    private fun readFrom(fromChar: Int) {
         val text = binding.etText.text?.toString()
         // Dismiss the keyboard: the user has committed to listening, and a
         // keyboard covering half the screen is the wrong thing to leave behind.
@@ -333,13 +368,13 @@ class MainActivity : AppCompatActivity() {
             is TextValidation.Empty -> showNotice(getString(R.string.empty_passage))
             is TextValidation.Truncated -> {
                 showNotice("Reading the first $MAX_INPUT_CHARS characters")
-                dispatch(validation.text)
+                dispatch(validation.text, fromChar)
             }
-            is TextValidation.Ready -> dispatch(validation.text)
+            is TextValidation.Ready -> dispatch(validation.text, fromChar)
         }
     }
 
-    private fun dispatch(text: String) {
+    private fun dispatch(text: String, fromChar: Int = 0) {
         clearNotice()
         rememberPassage()
         binding.tvState.text = getString(R.string.state_preparing)
@@ -349,6 +384,7 @@ class MainActivity : AppCompatActivity() {
                 action = SpeechService.ACTION_SPEAK
                 putExtra(SpeechService.EXTRA_TEXT, text)
                 putExtra(SpeechService.EXTRA_LABEL, "SONATA")
+                putExtra(SpeechService.EXTRA_FROM_CHAR, fromChar)
             },
         )
         startTicker()
@@ -484,6 +520,17 @@ class MainActivity : AppCompatActivity() {
     private fun render() {
         val svc = speechService
         val playing = svc?.isPlaying == true
+
+        // Remember how far the read has got, so returning to a long passage offers
+        // to carry on instead of starting over. Recorded here because render() runs
+        // on every tick and on every state change, which is exactly when the
+        // position can have moved.
+        if (svc != null && (playing || svc.isPaused)) {
+            prefs.rememberProgress(
+                passage = binding.etText.text?.toString().orEmpty(),
+                spokenChars = svc.spokenChars,
+            )
+        }
         val paused = svc?.isPaused == true
         val active = playing || paused
 
@@ -514,6 +561,19 @@ class MainActivity : AppCompatActivity() {
         if (showProgress) {
             binding.progressRead.progress = ((spoken.toFloat() / total) * PROGRESS_MAX).toInt()
                 .coerceIn(0, PROGRESS_MAX)
+        }
+
+        // ── Carry on ──────────────────────────────────────────────────────────
+        // Only offered when a stored position belongs to *this* text and there is
+        // more of it left. A button that cannot do anything must not be shown, and
+        // the offset must never be applied to different text.
+        val resumeAt = resumableOffset()
+        binding.btnResume.visibility = if (resumeAt > 0) View.VISIBLE else View.GONE
+        if (resumeAt > 0) {
+            binding.btnResume.text = getString(
+                R.string.action_carry_on_from,
+                percent(resumeAt, binding.etText.text?.length ?: 0),
+            )
         }
 
         // ── Primary control ───────────────────────────────────────────────────
@@ -632,6 +692,12 @@ class MainActivity : AppCompatActivity() {
 
         /** Used only for the "about N minutes" estimate on the count line. */
         const val WORDS_PER_MINUTE = 150
+
+        /**
+         * Do not offer to resume within this many characters of the end: there is
+         * nothing left worth carrying on to.
+         */
+        const val MIN_RESUME_CHARS = 40
 
         const val PROGRESS_MAX = 1000
         const val TICK_MS = 400L
