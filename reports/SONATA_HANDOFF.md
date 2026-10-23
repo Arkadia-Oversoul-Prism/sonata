@@ -38,6 +38,70 @@ founder's call, and out of this run's authority).
 > references; `git ls-remote origin refs/heads/feat/sonata-ux-and-playback-overhaul`
 > is authoritative.
 
+## 0.0 Round two — the founder tested, and two defects were mine
+
+The first version of this branch introduced a regression and did not fix the
+floating player. Both are now diagnosed and fixed, each with a test or a lint gate
+that would have caught it.
+
+### The read jumped the text and made no sense
+
+Every piece played only its opening moment before the next started.
+
+**Root cause.** `advanceIfPossible()` started the next piece whenever it was staged,
+with no check that the current piece had finished. Production prefetches
+(`prefetchDepth = 1`), so the next piece is synthesised *during* the current one —
+which means "the next piece is available" is the normal condition, not a signal
+that the current piece ended. Each staging event therefore pre-empted the piece
+being listened to, and `MediaPlayer.play()` stops the previous stream to do it. The
+read hopped forward one piece at a time.
+
+**Why the suite missed it.** Every online test ran at `prefetchDepth = 0`, which
+makes the read strictly sequential: the next piece is not requested until the
+current one ends, so `advanceIfPossible` is never called with a later piece already
+staged. The production default was never exercised by any test. That was the real
+defect behind the defect, and two tests now pin the production depth — both fail
+before the fix.
+
+The fix is an explicit `playingSegment` flag, rather than inferring "is something
+playing" from the player, which cannot tell "paused" from "finished".
+
+Two further defects surfaced while fixing it:
+
+- `pause()` left the read looking live while the player held a paused stream, so a
+  later advance could start a piece over a pause. `resume()` now asks the *player*
+  whether a stream is paused and falls through to the next piece when there is
+  nothing to resume. Deciding that from a bookkeeping flag was the bug.
+- `FakeAudioPlayer.complete()` left `paused` set, unlike the real player whose
+  completion listener clears it. That let a test resume a stream that had already
+  ended. The fake now matches `AndroidAudioPlayer`.
+
+### The floating player still did not work
+
+Four separate reasons, on top of the three already fixed:
+
+1. **It was a plain background service holding an overlay window.** Android
+   reclaims background processes and the window goes with them, so the player
+   appeared then vanished, or never appeared. It is now a `specialUse` foreground
+   service — which is what actually keeps a window of this kind alive — with the
+   manifest permission, the declared `foregroundServiceType`, the required subtype
+   property, and a silent minimum-importance channel for its ongoing notification.
+2. **It would have crashed on Android 10.** `maxX`/`maxY` (the drag clamp) used
+   `WindowMetrics`, which is API 30, on a `minSdk` of 29. Found by lint.
+3. **The Float button hid the app behind the overlay.** `moveTaskToBack` sent Sonata
+   away before the user could see whether anything appeared, so a failure left them
+   on the home screen with no explanation. The app now stays in front and reports
+   that the player is on.
+4. **It could be dragged off-screen** and left there — invisible, unreachable, and
+   indistinguishable from the player having closed itself. Dragging is now clamped.
+
+Also found by lint: every icon tint was `android:tint`, which an AppCompat
+`ImageView` does not reliably honour, so the icon colours set in the redesign may
+never have taken effect. All seven are now `app:tint`. `lintDebug` is now a CI gate
+because it found two defects that reading the code did not.
+
+---
+
 ## 0.1 The two reported defects, traced to one cause
 
 The founder reported that speech did not begin immediately and that a length limit
