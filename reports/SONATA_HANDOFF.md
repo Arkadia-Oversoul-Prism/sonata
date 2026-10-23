@@ -38,6 +38,51 @@ founder's call, and out of this run's authority).
 > references; `git ls-remote origin refs/heads/feat/sonata-ux-and-playback-overhaul`
 > is authoritative.
 
+## 0.00000 Round six — from repair to daily use
+
+With playback and the floating player confirmed working on the device, this round moves
+from fixing defects to making the app worth returning to.
+
+**Carry on from where you stopped.** The gap: leaving a long passage and coming back
+restarted it from the top. For a read-aloud app used in bursts, that makes a long
+passage useless. The passage was remembered; the position was not.
+
+- `TtsEngine.speakFrom(text, fromChar)` resumes at the piece containing the offset.
+  The engine owns this because it knows where each piece begins. Resuming lands on a
+  piece boundary, so a read never starts mid-word; the offset is clamped into the text
+  so a stale position cannot start past the end.
+- `ResumePoint.offset(storedPassage, storedOffset, currentPassage)` is the rule that
+  decides whether to offer a resume. It is pure and separately tested because it is the
+  safety property: an offset applied to text it does not describe drops the user into
+  the wrong part of a passage. Every uncertain case resolves to "start from the top".
+- The position is written on `onPause`, on stop, and every five seconds during playback
+  — not on every 400 ms tick, which was the first cut and would have been 2.5 disk
+  writes a second for a value only read when the user returns.
+- The button says "Carry on from 42%" and is hidden when there is nothing to carry on
+  from, so it is never a dead control.
+
+**Speed changes now say when they take effect.** The speed applies per synthesis
+request, so a change mid-read starts from the next piece. Nothing said so, and a
+slider that appears to do nothing reads as broken.
+
+**Progress after a mid-passage fallback (found, not reported).** When online synthesis
+fails part-way, the offline voice takes over the *remainder* — a different string from
+the passage. `spokenChars` reported that offset directly, so the progress bar dropped
+back toward zero as the fallback happened, even though the audio was continuous. On a
+long passage that looks like the read restarting. `PlaybackState.Offline` now carries
+`originInPassage`, and progress is always against the passage the user offered.
+
+**On the regression test for that fix.** The first version failed at the first piece,
+where the origin is zero, so it passed with and without the fix — it proved nothing. It
+now plays piece 1, lets piece 2 fail, and asserts progress is past zero after the
+takeover, and it was confirmed to fail when the fix is reverted. That check is what the
+float fix needed three rounds earlier and did not get.
+
+Test count: 112 at the start of this work, **134 now**, all passing. Lint clean, debug
+APK builds.
+
+---
+
 ## 0.0000 Round five — both confirmed working on the device
 
 The founder tested the round-four build on hardware: **playback works and the floating
