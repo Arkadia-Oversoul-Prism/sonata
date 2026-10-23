@@ -195,10 +195,23 @@ class MainActivity : AppCompatActivity() {
                 val s = SpeedSteps.SPEEDS[progress]
                 prefs.speed = s
                 renderSpeed(s)
+                // The speed is applied per synthesis request, so a change mid-read
+                // takes effect from the next piece. Saying so is the difference
+                // between "it works, shortly" and "the slider does nothing".
+                if (speechService?.isPlaying == true || speechService?.isPaused == true) {
+                    showNotice("Speed ${s}× from the next part")
+                }
             }
 
             override fun onStartTrackingTouch(sb: SeekBar) {}
-            override fun onStopTrackingTouch(sb: SeekBar) {}
+
+            // The notice is transient: clear it once the user has settled on a value,
+            // so it does not sit there for the rest of the read.
+            override fun onStopTrackingTouch(sb: SeekBar) {
+                if (speechService?.isPlaying != true && speechService?.isPaused != true) {
+                    clearNotice()
+                }
+            }
         })
 
         // The chip steps the speed without opening More: the most common
@@ -208,6 +221,9 @@ class MainActivity : AppCompatActivity() {
             prefs.speed = next
             binding.seekSpeed.progress = SpeedSteps.indexOf(next)
             renderSpeed(next)
+            if (speechService?.isPlaying == true || speechService?.isPaused == true) {
+                showNotice("Speed ${next}× from the next part")
+            }
         }
     }
 
