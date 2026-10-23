@@ -196,10 +196,12 @@ still no second screen. New in this run:
 
 | Item | Value |
 | --- | --- |
-| Unit tests | **110 pass, 0 failures** (`./gradlew testDebugUnitTest`) |
+| Unit tests | **112 pass, 0 failures** (`./gradlew testDebugUnitTest`) |
+| Lint | `lintDebug` clean, and now a CI gate |
 | Instrumented tests | 21 tests compile and package; **never executed** (no device, no KVM) |
 | Debug APK | builds locally; `apksigner verify` — signed, installable |
-| CI (per-commit, all green) | `05e3ee1b`, `b93d2e0f`, `55c732f`, `28515d2`, `aac7311`, `d68d38a1` |
+| APK manifest verified | `foregroundServiceType=0x40000000` (specialUse), subtype property present, `FOREGROUND_SERVICE_SPECIAL_USE` present — read back from the built APK, not the source |
+| CI (per-commit, all green) | `05e3ee1b`, `b93d2e0f`, `55c732f`, `28515d2`, `aac7311`, `d68d38a1`, `fa66ca4`, `9cf0205`, `c85df07`, `17571c2`, `9b1217d` |
 | CI run for `55c732f` | [39732542990](https://github.com/Arkadia-Oversoul-Prism/sonata/actions/runs/39732542990) — success |
 | Installable debug APK | [artifact 12405671869](https://github.com/Arkadia-Oversoul-Prism/sonata/actions/runs/39732542990/artifacts/12405671869) (`Sonata-debug-installable-55c732fa…`) |
 | Unit-test report | [artifact 12405671873](https://github.com/Arkadia-Oversoul-Prism/sonata/actions/runs/39732542990/artifacts/12405671873) |
@@ -211,18 +213,29 @@ unsigned and therefore not installable; it is a build product for inspection.
 ## 0.4 Confirmed by execution vs. still needing a device
 
 **Confirmed by execution here:**
-- The unit suite, including the new regression tests for the split invariant, the
-  progressive pipeline, pause/resume between pieces, and the mid-passage fallback.
+- The unit suite (112 tests), including the split invariant, the progressive
+  pipeline, pause/resume between pieces, the mid-passage fallback, and — added in
+  round two — two tests that run at the *production* prefetch depth and fail without
+  the fix for the piece-cutting regression.
+- `lintDebug` clean, which is how the API-29 crash and the dead icon tints were
+  found.
 - Debug and release APK assembly; instrumented sources compile.
+- The built debug APK's merged manifest and signature, inspected with `aapt2` and
+  `apksigner` rather than inferred from source.
 - Every CI run on this branch is green.
 
 **Not verified on a physical device — do not claim otherwise:**
 - That speech now *audibly* begins in about a second. The latency figures above are
   backend measurements plus the design of the new path; the perceived improvement has
   not been heard on hardware.
-- That the floating player opens, drags, collapses and expands. The three defects are
-  fixed and the code paths are correct by inspection, but the overlay has never run on
-  a device in this environment.
+- That the floating player opens, drags, collapses and expands, and survives the app
+  being backgrounded. Seven defects are fixed and the APK's manifest is verified, but
+  the overlay has never run on a device in this environment — and the last device
+  report was that it did not work at all, so this needs confirming rather than
+  assuming.
+- That the read now plays every piece in order *audibly*. The regression is pinned by
+  tests at the production prefetch depth, which is strong evidence, but it has not
+  been heard on hardware.
 - That the redesigned screen looks right at real densities and font scales.
 - The instrumented suite (21 tests) has never executed.
 
@@ -245,16 +258,18 @@ unsigned and therefore not installable; it is a build product for inspection.
 
 ## 0.6 Three highest-value next actions
 
-1. **Install the debug APK on the founder's device and confirm the two reported
-   defects are gone** — specifically that a paragraph starts speaking in about a
-   second, and that a 20,000-character passage is read to the end. This is the only
-   way to close the report that started this run.
+1. **Install the new debug APK and listen to a long passage end to end.** The
+   piece-cutting regression is fixed and pinned by tests at the production prefetch
+   depth, but the fix has never been heard. Confirm every sentence is spoken once, in
+   order, with no repeats or jumps.
 2. **Grant the overlay permission and exercise the floating player** — open, drag,
-   collapse to the bubble, expand, and confirm it survives switching apps. The code is
-   fixed but unproven on hardware.
+   collapse to the bubble, expand, switch apps, come back. It is a foreground service
+   now with a verified manifest, but the last device report was that it did not work
+   at all, so it needs a real check.
 3. **Add an emulator job to CI** (`reactivecircus/android-emulator-runner`, API 34) so
    the 21 instrumented tests execute. They are written and compiling; they have never
-   run, and until they do, the device-facing behaviour rests on inspection alone.
+   run, and the round-two regression is a direct consequence of device-facing
+   behaviour resting on tests that did not exercise the production configuration.
 
 ---
 
