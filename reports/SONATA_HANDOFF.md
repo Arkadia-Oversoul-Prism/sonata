@@ -38,6 +38,40 @@ founder's call, and out of this run's authority).
 > references; `git ls-remote origin refs/heads/feat/sonata-ux-and-playback-overhaul`
 > is authoritative.
 
+## 0.00 Round three — the founder reports a crash on Float, playback now fine
+
+Playback works on the device. Tapping Float crashes the app.
+
+**Why this class of bug looks the way it does.** `FloatingOverlayService` runs in
+the app's own process, on the main thread. An uncaught throw in a `Service` or in a
+touch/click listener therefore kills the *whole app*, not just the player. So
+"the app crashes when I tap Float" means: something on that path throws, and there
+is no single suspect — every throwable path presents identically. The ones found
+and closed:
+
+| Path | What threw | Now |
+| --- | --- | --- |
+| `startForegroundService` in `MainActivity` | `ForegroundServiceStartNotAllowedException` when the app may not start an FGS | Caught; the app says the player could not open and keeps playing |
+| Collapse / expand | `removeView` + `addView` per tap, each able to throw `BadTokenException` | Both states live in the window from the start; a tap only toggles visibility, so no gesture performs a window operation |
+| The 600 ms ticker | Runs on the main thread forever, so one throw becomes a crash *loop* | Guarded |
+| `updateViewLayout` during a drag | Called on every touch move | Guarded |
+| A stored off-screen position | After rotation or resize, the player is unreachable | Clamped at drag start as well as during |
+
+**Instrumentation for the next report.** Because there is no device here, this
+crash could not be reproduced. Step logging was added at each stage, so the next
+occurrence can be pinpointed rather than guessed at:
+
+```
+adb logcat -s SonataOverlay SonataMain
+```
+
+It prints `starting floating player`, `foreground notification posted`, `overlay
+permission granted`, `window attached` — and a `could not start` / `could not
+attach` line with the exception message when a stage fails. Whichever line is last
+identifies the stage.
+
+---
+
 ## 0.0 Round two — the founder tested, and two defects were mine
 
 The first version of this branch introduced a regression and did not fix the
