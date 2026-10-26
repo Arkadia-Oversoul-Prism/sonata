@@ -74,6 +74,61 @@ streams cannot play at once, so auditioning a voice mid-read stops the read. Tha
 unavoidable; silently losing the user's place is not. The activity now records the
 position before dispatching a preview, so **Carry on** brings the user back.
 
+## 0.1.3b The floating player's window, now verified on a device
+
+The founder asked for emulator coverage precisely because Robolectric had caught a
+window-class bug that device testing and code review had missed, and would also catch
+window-visibility bugs. That instinct was right, and the coverage now exists.
+
+Every previous check of the floating player asserted the service's own `attached` flag —
+which says the service *believes* it has a window, not that the window is on screen, has
+a size, or sits where the user can see it. `DeviceOverlayWindowTest` asks the window
+manager instead, and never asks Sonata. Three properties, all passing on the API 34
+emulator:
+
+| Test | What it proves |
+| --- | --- |
+| `p4_1_the_floating_window_is_actually_visible_and_on_screen` | the window exists, is non-empty, and is on the display |
+| `p4_2_collapsing_leaves_a_visible_window` | collapsing leaves a visible window, not a zero-sized or removed one |
+| `p4_3_closing_removes_the_window` | closing removes the window rather than leaving it on screen |
+
+**Evidence (execution).** Run
+[`40391169216`](https://github.com/Arkadia-Oversoul-Prism/sonata/actions/runs/40391169216),
+artifact `Sonata-instrumented-test-results-...`, test XML:
+
+```
+tests="23" failures="0" errors="0" skipped="0"
+DeviceOverlayWindowTest  p4_1_...  PASSED
+DeviceOverlayWindowTest  p4_2_...  PASSED
+DeviceOverlayWindowTest  p4_3_...  PASSED
+```
+
+`skipped="0"` matters as much as `failures="0"`: the tests grant `SYSTEM_ALERT_WINDOW`
+with `appops` and skip rather than fail if the grant does not take, so a silent skip
+would have looked like a pass. It did not skip.
+
+Two rounds were needed to get there, and both failures were in the test, not the app —
+which is worth recording because it is the kind of thing that gets mistaken for a product
+bug:
+
+1. The first version required `getRoot() != null` on each window and filtered by package
+   name. That discarded every window on a headless emulator, so a working overlay
+   reported as absent.
+2. The second used `UiAutomation.windows` unfiltered; it returns an empty list on a
+   headless emulator regardless of what is on screen, because the window list it exposes
+   is gated on accessibility flags the harness does not set.
+
+The reliable source is the window manager's own record, which is also what a human runs
+with `adb shell dumpsys window` — so the test and the manual procedure now agree. The
+player's window was given a title (`SonataFloatingPlayer`), which costs nothing and makes
+it identifiable in a device dumpsys. Failures now carry a diagnosis (the window list plus
+the window manager's lines for the package) so the next one is readable from CI alone
+rather than costing a round trip to interpret.
+
+What this does **not** prove: that the window survives navigation between applications, or
+that the founder's original report is fixed on the founder's specific device. It proves
+the window is created, visible, and correctly torn down on a clean Android 14 runtime.
+
 ## 0.1.4 The "more emotionally alive voice" request — measured, and not deliverable here
 
 This is the honest part. The request was for something closer to ElevenLabs. Every
