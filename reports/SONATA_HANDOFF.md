@@ -129,6 +129,52 @@ What this does **not** prove: that the window survives navigation between applic
 that the founder's original report is fixed on the founder's specific device. It proves
 the window is created, visible, and correctly torn down on a clean Android 14 runtime.
 
+## 0.1.3c Immediate start, now measured rather than inferred
+
+The founder's first reported defect was a delay before speech began. Every test of the
+progressive read asserted the *shape* of the pipeline — a short first request, an ordered
+split, nothing over the backend ceiling — and none of them measured the property. Shape is
+a proxy for latency; it is not latency.
+
+`p3_7` measures it. The server answers the opening piece immediately and every later piece
+**3 seconds late**, so an engine that waits for the whole passage would be tens of seconds
+from its first sound. The test asserts first audio inside a 3-second budget.
+
+**Evidence (execution).** Run
+[`40404868557`](https://github.com/Arkadia-Oversoul-Prism/sonata/actions/runs/40404868557),
+test XML: `tests="25" failures="0" errors="0" skipped="0"`,
+
+```
+p3_7_the_first_audio_starts_without_waiting_for_the_rest_of_... PASSED 0.075s
+p3_8_the_whole_passage_is_read_not_just_the_opening_piece      PASSED 0.830s
+```
+
+0.075 s is the test's whole wall time, so first audio arrived far inside the budget while
+the rest of the passage was still deliberately stalled. `p3_8` guards the obvious cheat —
+starting fast and stopping — by completing the read and asserting the request count equals
+the piece count, which catches both stopping early and requesting a piece twice.
+
+Both run at the **production prefetch depth of 1**, not the convenient 0. That distinction
+has already cost this project once.
+
+### Two test-soundness failures, both worth recording
+
+The emulator job failed twice on this test before it was sound, and **both failures were
+the test, not the engine**:
+
+1. `p3_7` reported "first audio took 3091ms" — suspiciously exactly the delay placed on
+   the *second* piece. `MockWebServer`'s `QueueDispatcher` is positional, and at prefetch
+   depth 1 the opening piece and its successor are in flight together, so the delayed
+   response can land on the opening request. The test measured its own mis-mapping. Fixed
+   by choosing the response from the request body, so arrival order no longer matters —
+   rather than by loosening the threshold, which would have hidden a real regression later.
+2. `p3_8` *passed* but took 21 s: it waited for a completion the no-op player can never
+   send, then fell back to a weak assertion. A test that cannot reach its own completion
+   path is not testing progression. It now completes the read with a player that reports
+   each piece finished.
+
+A passing test that never reaches its assertion is worth less than a failing one.
+
 ## 0.1.4 The "more emotionally alive voice" request — measured, and not deliverable here
 
 This is the honest part. The request was for something closer to ElevenLabs. Every
