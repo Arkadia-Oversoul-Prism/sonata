@@ -185,6 +185,11 @@ class FloatingOverlayService : Service() {
         gravity = Gravity.TOP or Gravity.START
         x = 60
         y = 220
+        // Name the window. It costs nothing, it makes the player identifiable in
+        // `dumpsys window` and in `adb shell dumpsys window windows` when diagnosing a
+        // device, and it gives the instrumented tests a stable handle on this specific
+        // window rather than a guess by package or type.
+        title = WINDOW_TITLE
     }
 
     // ── Lifecycle ──────────────────────────────────────────────────────────
@@ -543,6 +548,9 @@ class FloatingOverlayService : Service() {
 
         /** Action from the notification's Close button. */
         const val ACTION_CLOSE = "com.arkadia.sonata.overlay.CLOSE"
+
+        /** The floating player's window title, as the window manager reports it. */
+        const val WINDOW_TITLE = "SonataFloatingPlayer"
 
         /**
          * The running instance, for instrumentation only.
