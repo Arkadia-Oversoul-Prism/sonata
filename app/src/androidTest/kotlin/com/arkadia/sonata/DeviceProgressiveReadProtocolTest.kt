@@ -230,10 +230,19 @@ class DeviceProgressiveReadProtocolTest {
     @Test
     fun p3_7_the_first_audio_starts_without_waiting_for_the_rest_of_the_passage() {
         val passage = longPassage()
-        server.enqueue(audioResponse())
-        // Later pieces are slow on purpose: 3s each, several of them. Waiting for the
-        // passage would therefore take far longer than the threshold below.
-        repeat(64) { server.enqueue(audioResponse().setBodyDelay(3, TimeUnit.SECONDS)) }
+        val opening = SpeechChunker.splitForStreaming(passage).first()
+        server.dispatcher = object : okhttp3.mockwebserver.Dispatcher() {
+            override fun dispatch(request: okhttp3.mockwebserver.RecordedRequest): MockResponse {
+                val body = request.body.readUtf8()
+                // Delay everything except the opening piece. `QueueDispatcher` would be
+                // positional, and with two requests in flight the arrival order is not
+                // guaranteed to match the intended one — which made a fast engine look
+                // slow on the first run of this test. Keying on content removes the
+                // assumption rather than relying on timing luck.
+                return if (body.contains(opening)) audioResponse()
+                else audioResponse().setBodyDelay(3, TimeUnit.SECONDS)
+            }
+        }
 
         val engine = engine(cacheDir(), prefetchDepth = 1)
         val firstAudio = CountDownLatch(1)
