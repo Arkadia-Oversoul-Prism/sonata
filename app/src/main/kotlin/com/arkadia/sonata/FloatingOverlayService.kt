@@ -190,6 +190,7 @@ class FloatingOverlayService : Service() {
     // ── Lifecycle ──────────────────────────────────────────────────────────
 
     override fun onCreate() {
+        liveInstance = java.lang.ref.WeakReference(this)
         super.onCreate()
 
         // Go foreground before anything else. The service is started with
@@ -298,6 +299,7 @@ class FloatingOverlayService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onDestroy() {
+        liveInstance = null
         stopTicker()
         // The ongoing notification exists only while the window does.
         runCatching { stopForeground(STOP_FOREGROUND_REMOVE) }
@@ -541,6 +543,18 @@ class FloatingOverlayService : Service() {
 
         /** Action from the notification's Close button. */
         const val ACTION_CLOSE = "com.arkadia.sonata.overlay.CLOSE"
+
+        /**
+         * The running instance, for instrumentation only.
+         *
+         * A device test has no binder to this service (it is started, not bound), so
+         * without this there is no way to drive collapse/expand and observe the window
+         * it owns. Held weakly and cleared in onDestroy, so it cannot keep a dead
+         * service alive.
+         */
+        private var liveInstance: java.lang.ref.WeakReference<FloatingOverlayService>? = null
+
+        internal fun liveInstanceForTest(): FloatingOverlayService? = liveInstance?.get()
 
         /** Touch travel, in px, above which a gesture is a drag rather than a tap. */
         private const val TAP_SLOP = 12f
