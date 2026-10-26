@@ -34,6 +34,9 @@ class DeviceOverlayWindowTest {
 
     private val context: Context get() = InstrumentationRegistry.getInstrumentation().targetContext
 
+    /** The window type the floating player uses. */
+    private val OVERLAY_TYPE = WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
+
     @Before
     fun setUp() {
         if (!Settings.canDrawOverlays(context)) {
@@ -58,32 +61,82 @@ class DeviceOverlayWindowTest {
         SystemClock.sleep(500)
     }
 
-    /** One window the platform reports for this app, with its real on-screen bounds. */
-    private data class PlatformWindow(val type: Int, val bounds: Rect)
+    /** One window the platform reports, with its real on-screen bounds. */
+    private data class PlatformWindow(val type: Int, val bounds: Rect) {
+        override fun toString(): String = "type=$type $bounds"
+    }
 
     /**
-     * Ask the platform which windows this app actually has.
+     * Ask the platform which windows exist.
      *
      * Read from `UiAutomation`, which reports what the window manager composited — not
-     * what the app intended. Polled, because a window appears on a later main-thread
-     * pass and a fixed sleep is a flake waiting to happen.
+     * what the app intended. Two deliberate choices here, both learned from a failed
+     * run:
+     *
+     *  - The window *type* is read directly off the window, and the accessibility node
+     *    tree is never touched. Requiring `getRoot() != null` silently discarded every
+     *    window on a headless emulator, which made a working overlay look absent.
+     *  - Windows are not filtered by package name. An overlay window's reported
+     *    package is not guaranteed to equal the test's target package, and the type is
+     *    the unambiguous signal: `TYPE_APPLICATION_OVERLAY` is what the floating player
+     *    uses.
+     *
+     * Polled, because a window appears on a later main-thread pass and a fixed sleep is
+     * a flake waiting to happen.
      */
-    private fun platformWindows(timeoutMs: Long = 8_000): List<PlatformWindow> {
+    private fun platformWindows(timeoutMs: Long = 10_000): List<PlatformWindow> {
         val deadline = SystemClock.uptimeMillis() + timeoutMs
         var found = emptyList<PlatformWindow>()
         while (SystemClock.uptimeMillis() < deadline) {
-            val windows = InstrumentationRegistry.getInstrumentation().uiAutomation.windows
-            found = windows.mapNotNull { w ->
-                val root = w.root ?: return@mapNotNull null
-                if (root.packageName != context.packageName) return@mapNotNull null
+            found = InstrumentationRegistry.getInstrumentation().uiAutomation.windows.map { w ->
                 val r = Rect()
                 w.getBoundsInScreen(r)
                 PlatformWindow(w.type, r)
             }
-            if (found.any { it.bounds.width() > 0 && it.bounds.height() > 0 }) break
+            if (found.any { it.type == OVERLAY_TYPE && it.bounds.width() > 0 }) break
             SystemClock.sleep(250)
         }
         return found
+    }
+
+    /**
+     * Wait until no overlay window remains, up to [timeoutMs].
+     *
+     * Separate from [platformWindows], which polls for presence: waiting for absence by
+     * polling for presence would always burn the whole timeout before concluding.
+     */
+    private fun awaitNoOverlayWindow(timeoutMs: Long = 8_000): Boolean {
+        val deadline = SystemClock.uptimeMillis() + timeoutMs
+        while (SystemClock.uptimeMillis() < deadline) {
+            if (overlayWindows().isEmpty()) return true
+            SystemClock.sleep(250)
+        }
+        return overlayWindows().isEmpty()
+    }
+
+    /** The overlay windows the platform reports, non-empty ones only. */
+    private fun overlayWindows(): List<PlatformWindow> =
+        platformWindows().filter { it.type == OVERLAY_TYPE && it.bounds.width() > 0 && it.bounds.height() > 0 }
+
+    /**
+     * A diagnosis for a failure, so the next one is readable from CI alone.
+     *
+     * A bare "no window" assertion cost a round trip to interpret; the window list and
+     * the window manager's own view of this package make the cause visible immediately.
+     */
+    private fun diagnose(): String {
+        val all = platformWindows().joinToString(", ") { it.toString() }
+        val dumpsys: String = runCatching {
+            val pfd = InstrumentationRegistry.getInstrumentation().uiAutomation
+                .executeShellCommand("dumpsys window windows")
+            // `executeShellCommand` hands back a ParcelFileDescriptor, not a stream.
+            java.io.FileInputStream(pfd.fileDescriptor).bufferedReader().use { it.readText() }
+        }.getOrDefault("(dumpsys unavailable)")
+        val interesting = dumpsys.lines()
+            .filter { it.contains(context.packageName) || it.contains("mCurrentFocus") }
+            .take(12)
+            .joinToString("\n")
+        return "all windows: [$all]\ndumpsys lines for ${context.packageName}:\n$interesting"
     }
 
     private fun startOverlay() {
@@ -108,11 +161,10 @@ class DeviceOverlayWindowTest {
     fun p4_1_the_floating_window_is_actually_visible_and_on_screen() {
         startOverlay()
 
-        val windows = platformWindows()
-        val shown = windows.filter { it.bounds.width() > 0 && it.bounds.height() > 0 }
+        val shown = overlayWindows()
         assertTrue(
-            "the app has no non-empty window on screen; the platform reports " +
-                windows.map { "type=${it.type} ${it.bounds}" },
+            "no TYPE_APPLICATION_OVERLAY window is on screen, so the floating player " +
+                "has no visible window.\n" + diagnose(),
             shown.isNotEmpty(),
         )
 
@@ -133,8 +185,8 @@ class DeviceOverlayWindowTest {
     fun p4_2_collapsing_leaves_a_visible_window() {
         startOverlay()
         assertTrue(
-            "the overlay should be visible before collapsing",
-            platformWindows().any { it.bounds.width() > 0 && it.bounds.height() > 0 },
+            "the overlay should be visible before collapsing.\n" + diagnose(),
+            overlayWindows().isNotEmpty(),
         )
 
         // Collapse through the same entry point a tap uses.
@@ -142,11 +194,10 @@ class DeviceOverlayWindowTest {
             FloatingOverlayService.liveInstanceForTest()?.collapseForTest()
         }
 
-        val shown = platformWindows().filter { it.bounds.width() > 0 && it.bounds.height() > 0 }
         assertTrue(
             "a collapsed overlay must still be a visible window, not a zero-sized or " +
-                "removed one; the platform reports " + shown.map { it.bounds },
-            shown.isNotEmpty(),
+                "removed one.\n" + diagnose(),
+            overlayWindows().isNotEmpty(),
         )
     }
 
@@ -155,20 +206,18 @@ class DeviceOverlayWindowTest {
     fun p4_3_closing_removes_the_window() {
         startOverlay()
         assertTrue(
-            "the overlay should be visible before closing",
-            platformWindows().any { it.bounds.width() > 0 && it.bounds.height() > 0 },
+            "the overlay should be visible before closing.\n" + diagnose(),
+            overlayWindows().isNotEmpty(),
         )
 
         context.startService(
             Intent(context, FloatingOverlayService::class.java)
                 .setAction(FloatingOverlayService.ACTION_CLOSE),
         )
-        SystemClock.sleep(2_000)
 
         assertTrue(
-            "closing must remove the window, not leave it on screen; the platform still " +
-                "reports " + platformWindows().filter { it.bounds.width() > 0 },
-            platformWindows().none { it.bounds.width() > 0 && it.bounds.height() > 0 },
+            "closing must remove the window, not leave it on screen.\n" + diagnose(),
+            awaitNoOverlayWindow(),
         )
     }
 }
