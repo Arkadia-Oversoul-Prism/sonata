@@ -136,6 +136,15 @@ class TtsEngine(
     /** The file owned by the piece currently playing, if any. */
     private var currentFile: File? = null
 
+    /**
+     * True while a voice sample is playing.
+     *
+     * The service uses this to know that completion means "the sample ended", not
+     * "the read ended", so a preview never reports a finished read.
+     */
+    var isPreviewing: Boolean = false
+        private set
+
     // ── The segmented read ────────────────────────────────────────────────────
 
     /** One request-sized piece of the passage. [startChar] is where it begins. */
@@ -340,6 +349,93 @@ class TtsEngine(
 
             PlaybackState.Idle -> listener?.onError("Nothing to resume", null)
         }
+    }
+
+    /**
+     * Speak a short sample of [voiceId] and stop.
+     *
+     * This exists because choosing a voice by reading a name is guesswork. The
+     * gateway can synthesise four voices and they sound different, so the only
+     * honest way to pick one is to hear it — the founder asked to compare voices and
+     * found the others "robotic", which is not a judgement a label can support.
+     *
+     * It is deliberately not [speak]: it must not become the passage, must not be
+     * resumable, and must not be carried on. Conflating the two would overwrite the
+     * reading position with a sample.
+     *
+     * It always uses the online voice. A sample of the offline voice would tell the
+     * user nothing about the neural voice they are choosing, and the offline engine's
+     * readiness cost would make the preview slow for no benefit.
+     */
+    fun preview(text: String, voiceId: String) {
+        val trimmed = text.trim()
+        if (trimmed.isEmpty()) {
+            listener?.onError("Nothing to preview", null)
+            return
+        }
+        val url = settings.backendUrl.trim()
+        if (!settings.preferOnline || url.isEmpty()) {
+            listener?.onError("Voice preview needs the online voice", null)
+            return
+        }
+
+        supersede()
+        val myGeneration = generation
+        state = PlaybackState.Idle
+        isPreviewing = true
+        listener?.onStart(TtsEngineKind.ONLINE)
+
+        val job = scope.launch {
+            // A sample is one short request, so it needs no chunking.
+            val result = transport.fetch(
+                text = trimmed,
+                voice = voiceId,
+                speed = effectiveSpeed(),
+                baseUrl = url,
+            )
+            withContext(mainDispatcher) {
+                if (myGeneration != generation) return@withContext
+                when (result) {
+                    is SynthesisResult.Failure -> {
+                        isPreviewing = false
+                        state = PlaybackState.Idle
+                        listener?.onError(result.reason, null)
+                    }
+
+                    is SynthesisResult.Success -> {
+                        val file = writeTempFile(result.bytes)
+                        currentFile = file
+                        val started = player.play(
+                            file = file,
+                            onCompletion = {
+                                if (myGeneration != generation) return@play
+                                isPreviewing = false
+                                currentFile?.delete()
+                                currentFile = null
+                                state = PlaybackState.Idle
+                                listener?.onComplete()
+                            },
+                            onError = { msg ->
+                                if (myGeneration != generation) return@play
+                                isPreviewing = false
+                                currentFile?.delete()
+                                currentFile = null
+                                state = PlaybackState.Idle
+                                listener?.onError(msg, null)
+                            },
+                        )
+                        if (!started) {
+                            file.delete()
+                            currentFile = null
+                            isPreviewing = false
+                            state = PlaybackState.Idle
+                            listener?.onError("The sample could not be played", null)
+                        }
+                    }
+                }
+            }
+        }
+        inFlight = job
     }
 
     /** Stop and release everything. Safe to call in any state. */

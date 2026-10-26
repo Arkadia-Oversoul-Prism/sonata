@@ -62,6 +62,8 @@ class SpeechService : Service() {
         fun onResume() {}
         fun onComplete() {}
         fun onError(msg: String) {}
+        /** A voice sample started, so the screen can show it is auditioning. */
+        fun onPreviewStart(voiceId: String) {}
     }
 
     fun addClient(client: Client) {
@@ -79,6 +81,9 @@ class SpeechService : Service() {
     /** Set when the current utterance is offline speech after an online failure. */
     var fellBackOffline: Boolean = false
         private set
+
+    /** The voice being auditioned, while a preview is in flight. */
+    private var previewVoiceId: String? = null
 
     // ── Service lifecycle ──────────────────────────────────────────────────
 
@@ -105,6 +110,18 @@ class SpeechService : Service() {
                 fellBackOffline = false
                 promoteToForeground(playing = true)
                 tts.speakFrom(command.text, command.fromChar)
+            }
+
+            // A voice sample. It must not touch currentText or the reading position,
+            // and it must not claim the foreground: a one-second sample that leaves a
+            // notification and a foreground service behind is worse than the sample
+            // is good. It runs in the service so it reuses the engine, transport and
+            // player, then stops itself when the utterance completes.
+            is SpeechCommand.Preview -> {
+                previewVoiceId = command.voiceId
+                lastError = null
+                clients.forEach { it.onPreviewStart(command.voiceId) }
+                tts.preview(command.text, command.voiceId)
             }
 
             SpeechCommand.Pause  -> { tts.pause();  updateNotification(playing = false) }
@@ -193,6 +210,17 @@ class SpeechService : Service() {
         override fun onComplete() {
             currentEngine = null
             lastError = null
+
+            // A finished preview is not a finished read. Reporting it as one would
+            // tell the main screen the passage had been read, which it has not, and
+            // the sample is not the passage.
+            if (tts.isPreviewing) {
+                previewVoiceId = null
+                stopForeground(STOP_FOREGROUND_REMOVE)
+                stopSelf()
+                return
+            }
+
             stopForeground(STOP_FOREGROUND_REMOVE)
             // Notified before stopSelf(): the service is gone by the time the last
             // client runs, and a client that only learns of completion from a
@@ -330,6 +358,9 @@ class SpeechService : Service() {
 
     companion object {
         const val ACTION_SPEAK  = "com.arkadia.sonata.SPEAK"
+        /** Speak a short sample of one voice and stop. Never a read. */
+        const val ACTION_PREVIEW = "com.arkadia.sonata.PREVIEW"
+        const val EXTRA_VOICE_ID = "voiceId"
         const val ACTION_PAUSE  = "com.arkadia.sonata.PAUSE"
         const val ACTION_RESUME = "com.arkadia.sonata.RESUME"
         const val ACTION_STOP   = "com.arkadia.sonata.STOP"

@@ -46,4 +46,8 @@
 
     <string name="empty_passage">Nothing to read — paste or type some text</string>
     <string name="clipboard_empty">Nothing to paste — the clipboard is empty</string>
+    <string name="action_hear_voice">Hear it</string>
+    <string name="action_hear_voice_desc">Hear a sample of the selected voice</string>
+    <string name="preview_playing">Playing a sample…</string>
+    <string name="preview_failed">The sample could not be played</string>
 </resources>

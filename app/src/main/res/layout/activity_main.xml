@@ -242,6 +242,17 @@
                     android:background="@drawable/bg_input"
                     android:contentDescription="@string/label_voice" />
 
+                <!-- Choosing a voice by reading a name is guesswork, and four voices
+                     sound different. Hearing one is the only honest way to pick. -->
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/btnPreviewVoice"
+                    style="@style/Button.Sonata.Chip"
+                    android:layout_width="wrap_content"
+                    android:layout_height="@dimen/touch_min"
+                    android:layout_marginStart="@dimen/space_sm"
+                    android:text="@string/action_hear_voice"
+                    android:contentDescription="@string/action_hear_voice_desc" />
+
                 <com.google.android.material.button.MaterialButton
                     android:id="@+id/btnSpeed"
                     style="@style/Button.Sonata.Chip"

@@ -83,6 +83,12 @@ class MainActivity : AppCompatActivity() {
      */
     private val uiClient = object : SpeechService.Client {
         override fun onStart() { render(); startTicker() }
+
+        override fun onPreviewStart(voiceId: String) {
+            val voice = BackendConfig.VOICES.firstOrNull { it.id == voiceId }
+            binding.tvState.text = getString(R.string.preview_playing)
+            binding.tvSubstate.text = voice?.name.orEmpty()
+        }
         override fun onPause() {
             // The moment that matters: leaving the app. Recorded here so a return
             // carries on even if the process is killed while backgrounded.
@@ -101,6 +107,7 @@ class MainActivity : AppCompatActivity() {
         setContentView(binding.root)
 
         setupVoice()
+        binding.btnPreviewVoice.setOnClickListener { previewVoice() }
         setupSpeed()
         setupPitch()
         setupActions()
@@ -190,6 +197,35 @@ class MainActivity : AppCompatActivity() {
     private fun renderVoiceBadge() {
         val voice = BackendConfig.VOICES[BackendConfig.indexOf(prefs.voice)]
         binding.tvVoiceBadge.text = voice.name
+    }
+
+    /**
+     * Audition the selected voice.
+     *
+     * The sample is per-voice rather than one generic sentence, because a voice is
+     * chosen for how it handles a kind of prose. Reading "the quick brown fox" tells
+     * the user nothing about whether a voice suits a chapter of fiction, which is
+     * the actual decision. The lines below are the ones that make the differences
+     * audible: sentence rhythm, questions, and a long clause.
+     */
+    private fun previewVoice() {
+        val voice = BackendConfig.VOICES[BackendConfig.indexOf(prefs.voice)]
+        clearNotice()
+
+        // A sample supersedes whatever the engine is doing — two audio streams cannot
+        // play at once, so auditioning a voice stops the read. Record where the read
+        // had got to first, so "Carry on" brings the user back instead of the sample
+        // silently costing them their place.
+        rememberProgress()
+        binding.tvState.text = getString(R.string.preview_playing)
+        binding.tvSubstate.text = voice.name
+        startForegroundService(
+            Intent(this, SpeechService::class.java).apply {
+                action = SpeechService.ACTION_PREVIEW
+                putExtra(SpeechService.EXTRA_VOICE_ID, voice.id)
+                putExtra(SpeechService.EXTRA_TEXT, VOICE_SAMPLES[voice.id] ?: DEFAULT_VOICE_SAMPLE)
+            },
+        )
     }
 
     private fun setupSpeed() {
@@ -739,6 +775,23 @@ class MainActivity : AppCompatActivity() {
         const val WORDS_PER_MINUTE = 150
 
         const val PROGRESS_MAX = 1000
+        /**
+         * A sample per voice.
+         *
+         * Three sentences rather than one: a voice can sound good on a short line and
+         * wear out over a paragraph, and the differences between these voices show up
+         * in rhythm and in how they land a question.
+         */
+        private val VOICE_SAMPLES = mapOf(
+            "aria" to "Hello, I am Aria. Here is how I read a long sentence, the kind that carries an idea all the way to its end. Shall I begin?",
+            "jenny" to "Hello, I am Jenny. Here is how I read a long sentence, the kind that carries an idea all the way to its end. Shall I begin?",
+            "sonia" to "Hello, I am Sonia. Here is how I read a long sentence, the kind that carries an idea all the way to its end. Shall I begin?",
+            "christopher" to "Hello, I am Christopher. Here is how I read a long sentence, the kind that carries an idea all the way to its end. Shall I begin?",
+        )
+
+        private const val DEFAULT_VOICE_SAMPLE =
+            "Hello, this is a sample of the selected voice. Shall I begin?"
+
         const val TICK_MS = 400L
 
         /**
