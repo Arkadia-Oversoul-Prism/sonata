@@ -2,7 +2,10 @@ package com.arkadia.sonata
 
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
+import android.os.SystemClock
 import java.io.File
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.runBlocking
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
@@ -78,13 +81,14 @@ class DeviceProgressiveReadProtocolTest {
         cacheDir: File,
         transport: TtsTransport = this.transport,
         baseUrl: String = server.url("/").toString(),
+        prefetchDepth: Int = 0,
     ) = TtsEngine(
         settings = FakeSettingsForDevice(backendUrl = baseUrl, preferOnline = true),
         cacheDir = cacheDir,
         transport = transport,
         player = NoopPlayer(),
         offline = NoopOfflineVoice(),
-        prefetchDepth = 0,
+        prefetchDepth = prefetchDepth,
     )
 
     @Test
@@ -208,6 +212,91 @@ class DeviceProgressiveReadProtocolTest {
         assertEquals(passage.trim().length, engine.totalChars)
         assertTrue("a long passage must be segmented", engine.segmentCount > 1)
         engine.shutdown()
+    }
+
+    /**
+     * The founder's first defect, measured rather than inferred: how long until sound.
+     *
+     * Every other test here asserts the *shape* of the pipeline — a short first
+     * request, an ordered split, no truncation. None of them measures the thing the
+     * founder actually reported, which was a delay before speech began. Shape is a
+     * proxy; this is the property.
+     *
+     * The server answers the opening piece at once and every later piece slowly. If
+     * the engine waited for the whole passage before playing anything, the first sound
+     * would be tens of seconds away. It must instead be roughly the first response.
+     */
+    @Test
+    fun p3_7_the_first_audio_starts_without_waiting_for_the_rest_of_the_passage() {
+        val passage = longPassage()
+        server.enqueue(audioResponse())
+        // Later pieces are slow on purpose: 3s each, several of them. Waiting for the
+        // passage would therefore take far longer than the threshold below.
+        repeat(64) { server.enqueue(audioResponse().setBodyDelay(3, TimeUnit.SECONDS)) }
+
+        val engine = engine(cacheDir(), prefetchDepth = 1)
+        val firstAudio = CountDownLatch(1)
+        engine.listener = object : TtsEngine.Listener {
+            override fun onStart(engine: TtsEngineKind) = firstAudio.countDown()
+            override fun onPaused(engine: TtsEngineKind) = Unit
+            override fun onResumed(engine: TtsEngineKind) = Unit
+            override fun onComplete() = Unit
+            override fun onError(msg: String, fellBackTo: TtsEngineKind?) = Unit
+        }
+
+        val t0 = SystemClock.uptimeMillis()
+        engine.speak(passage)
+        val started = firstAudio.await(15, TimeUnit.SECONDS)
+        val elapsed = SystemClock.uptimeMillis() - t0
+        engine.shutdown()
+
+        assertTrue("playback never started", started)
+        assertTrue(
+            "first audio took ${elapsed}ms. The opening response is served immediately " +
+                "and every later piece is delayed 3000ms, so a large value here means " +
+                "the engine waited for more than the opening piece.",
+            elapsed < 3_000,
+        )
+    }
+
+    /**
+     * The read must continue past the first piece, not just start quickly.
+     *
+     * A short first piece is only a fix if the rest of the passage follows it. This
+     * asserts that a later piece is actually requested, so "starts fast" cannot be
+     * satisfied by "starts fast and stops".
+     */
+    @Test
+    fun p3_8_the_read_continues_past_the_opening_piece() {
+        val passage = longPassage()
+        repeat(64) { server.enqueue(audioResponse()) }
+
+        val engine = engine(cacheDir(), prefetchDepth = 1)
+        val completed = CountDownLatch(1)
+        engine.listener = object : TtsEngine.Listener {
+            override fun onStart(engine: TtsEngineKind) = Unit
+            override fun onPaused(engine: TtsEngineKind) = Unit
+            override fun onResumed(engine: TtsEngineKind) = Unit
+            override fun onComplete() = completed.countDown()
+            override fun onError(msg: String, fellBackTo: TtsEngineKind?) = Unit
+        }
+
+        engine.speak(passage)
+        // The engine plays each piece; with 256-byte stubs the whole passage is fast.
+        completed.await(20, TimeUnit.SECONDS)
+        engine.shutdown()
+
+        val requests = generateSequence { server.takeRequest(1, TimeUnit.SECONDS) }.toList()
+        assertTrue(
+            "only ${requests.size} request(s) reached the server; the read did not " +
+                "continue past the opening piece",
+            requests.size > 1,
+        )
+        val pieces = SpeechChunker.splitForStreaming(passage)
+        assertTrue(
+            "the passage should need several requests, was ${pieces.size}",
+            pieces.size > 1,
+        )
     }
 }
 
