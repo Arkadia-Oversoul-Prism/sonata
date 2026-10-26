@@ -1,6 +1,7 @@
 package com.arkadia.sonata
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -49,5 +50,54 @@ class BackendConfigTest {
     fun `voice ids are unique`() {
         val ids = BackendConfig.VOICES.map { it.id }
         assertEquals(ids.size, ids.toSet().size)
+    }
+}
+
+/**
+ * The picker only offers voices that actually synthesise.
+ *
+ * Verified against the live gateway: `george` and `ryan` answer 502 with
+ * "All TTS engines failed. Edge: No audio was received." while the others return
+ * audio. Offering a voice the backend cannot speak turns a working app into a
+ * 502 for the user, so they are not offered.
+ */
+class VoiceOfferingTest {
+
+    @Test
+    fun `voices known to fail synthesis are not offered`() {
+        val ids = BackendConfig.VOICES.map { it.id }
+        assertFalse("george answers 502 on the live gateway", "george" in ids)
+        assertFalse("ryan answers 502 on the live gateway", "ryan" in ids)
+    }
+
+    @Test
+    fun `aetheria is not offered as a duplicate of aria`() {
+        // The gateway maps aetheria to en-US-AriaNeural, the same voice as aria.
+        val ids = BackendConfig.VOICES.map { it.id }
+        assertFalse("aetheria is the same underlying voice as aria", "aetheria" in ids)
+    }
+
+    @Test
+    fun `voices verified to synthesise are offered`() {
+        val ids = BackendConfig.VOICES.map { it.id }
+        listOf("aria", "jenny", "sonia", "christopher").forEach {
+            assertTrue("$it returned audio from the live gateway", it in ids)
+        }
+    }
+
+    @Test
+    fun `a stored voice that is no longer offered resolves to one that is`() {
+        // A preference written by an earlier build can name a removed voice.
+        val resolved = BackendConfig.resolveVoiceId("george")
+        assertTrue(
+            "a removed voice must degrade to an offered one, not a 502",
+            resolved in BackendConfig.VOICES.map { it.id },
+        )
+        assertEquals(BackendConfig.FALLBACK_VOICE_ID, resolved)
+    }
+
+    @Test
+    fun `a stored voice that is still offered is kept`() {
+        assertEquals("sonia", BackendConfig.resolveVoiceId("sonia"))
     }
 }

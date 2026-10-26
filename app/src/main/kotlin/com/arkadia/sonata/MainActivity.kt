@@ -167,7 +167,14 @@ class MainActivity : AppCompatActivity() {
         )
         adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
         binding.spinnerVoice.adapter = adapter
-        binding.spinnerVoice.setSelection(BackendConfig.indexOf(prefs.voice))
+
+        // Heal a preference that names a voice this build no longer offers. It can
+        // name `george`, `ryan`, or `aetheria`, which the gateway answers with 502, so
+        // leaving it in place would make the app fail for a user who never touched the
+        // picker. Written back once, at startup.
+        val resolved = BackendConfig.resolveVoiceId(prefs.voice)
+        if (resolved != prefs.voice) prefs.voice = resolved
+        binding.spinnerVoice.setSelection(BackendConfig.indexOf(resolved))
         binding.spinnerVoice.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
             override fun onItemSelected(p: AdapterView<*>, v: View?, pos: Int, id: Long) {
                 prefs.voice = BackendConfig.VOICES[pos].id

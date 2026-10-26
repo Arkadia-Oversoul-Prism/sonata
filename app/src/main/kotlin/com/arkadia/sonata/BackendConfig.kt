@@ -16,16 +16,42 @@ object BackendConfig {
     /** The canonical Arkadia origin (ADR-016). */
     const val DEFAULT_URL = "https://arkadia-qzu4.onrender.com"
 
-    /** Voices the backend advertises, in display order. */
+    /**
+     * Voices offered in the picker, in display order.
+     *
+     * Every entry here was verified against the live gateway with a real synthesis
+     * request, because the gateway advertises two voices it cannot synthesise.
+     * `GET /api/tts/status` lists seven, and `GET /api/tts/voices` describes all
+     * seven, but `george` and `ryan` both answer:
+     *
+     *     HTTP 502 {"detail":"TTS synthesis failed: All TTS engines failed.
+     *               Edge: No audio was received."}
+     *
+     * reproducibly, on repeated attempts, while the other five return audio. A picker
+     * that offers a voice the backend cannot speak produces a 502 the user reads as
+     * "Sonata is broken", so the two are not offered. The note on each voice below
+     * says what was verified rather than what the gateway claims.
+     *
+     * `aetheria` is deliberately absent: the gateway maps it to
+     * `en-US-AriaNeural` — the same underlying voice as `aria` — so offering both
+     * would be two labels for one voice. The interesting expressive behaviour belongs
+     * in a style parameter, not in a duplicate name.
+     */
     val VOICES = listOf(
-        Voice("aria",    "Aria",        "Warm US female"),
-        Voice("aetheria","Aetheria",    "Oracle — deep, calm"),
-        Voice("jenny",   "Jenny",       "Clear US female"),
-        Voice("sonia",   "Sonia",       "British female"),
-        Voice("christopher", "Christopher", "US male"),
-        Voice("george",  "George",      "British male"),
-        Voice("ryan",    "Ryan",        "Casual US male"),
+        Voice("aria", "Aria", "Warm, expressive — US female"),
+        Voice("jenny", "Jenny", "Natural, clear — US female"),
+        Voice("sonia", "Sonia", "Eloquent, composed — British female"),
+        Voice("christopher", "Christopher", "Rich, warm — US male"),
     )
+
+    /**
+     * The voice used when a stored preference names one that is no longer offered.
+     *
+     * A preference written by an earlier build can name `george`, `ryan`, or
+     * `aetheria`; resolving it to the first entry keeps the app working instead of
+     * sending a request the gateway will answer with 502.
+     */
+    val FALLBACK_VOICE_ID = VOICES.first().id
 
     data class Voice(val id: String, val name: String, val note: String) {
         /** Spinner label. */
@@ -34,4 +60,13 @@ object BackendConfig {
 
     fun indexOf(voiceId: String): Int =
         VOICES.indexOfFirst { it.id == voiceId }.coerceAtLeast(0)
+
+    /**
+     * Resolve a stored voice id to one this build offers.
+     *
+     * Returns [FALLBACK_VOICE_ID] for anything unknown, so a preference naming a
+     * removed voice degrades to a working voice rather than a 502.
+     */
+    fun resolveVoiceId(stored: String?): String =
+        VOICES.firstOrNull { it.id == stored }?.id ?: FALLBACK_VOICE_ID
 }
