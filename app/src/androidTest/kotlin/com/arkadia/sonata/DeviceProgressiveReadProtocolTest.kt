@@ -82,11 +82,12 @@ class DeviceProgressiveReadProtocolTest {
         transport: TtsTransport = this.transport,
         baseUrl: String = server.url("/").toString(),
         prefetchDepth: Int = 0,
+        player: AudioPlayer = NoopPlayer(),
     ) = TtsEngine(
         settings = FakeSettingsForDevice(backendUrl = baseUrl, preferOnline = true),
         cacheDir = cacheDir,
         transport = transport,
-        player = NoopPlayer(),
+        player = player,
         offline = NoopOfflineVoice(),
         prefetchDepth = prefetchDepth,
     )
@@ -260,18 +261,26 @@ class DeviceProgressiveReadProtocolTest {
     }
 
     /**
-     * The read must continue past the first piece, not just start quickly.
+     * The whole passage must be read, not just the opening piece.
      *
-     * A short first piece is only a fix if the rest of the passage follows it. This
-     * asserts that a later piece is actually requested, so "starts fast" cannot be
-     * satisfied by "starts fast and stops".
+     * A short first piece is only a fix if the rest of the passage follows it, so this
+     * asserts the read goes all the way through: the player completes each piece, and
+     * the number of requests must equal the number of pieces. That catches both failure
+     * modes at once — stopping early, and requesting a piece twice.
+     *
+     * The first version of this test used the no-op player and waited 20s for a
+     * completion that could never arrive, because the no-op never reports a piece
+     * finished. It passed on a weak "more than one request" assertion while burning the
+     * whole timeout. A test that cannot complete is not testing progression.
      */
     @Test
-    fun p3_8_the_read_continues_past_the_opening_piece() {
+    fun p3_8_the_whole_passage_is_read_not_just_the_opening_piece() {
         val passage = longPassage()
         repeat(64) { server.enqueue(audioResponse()) }
+        val pieces = SpeechChunker.splitForStreaming(passage)
+        assertTrue("the fixture must need several pieces", pieces.size > 1)
 
-        val engine = engine(cacheDir(), prefetchDepth = 1)
+        val engine = engine(cacheDir(), prefetchDepth = 1, player = CompletingPlayer())
         val completed = CountDownLatch(1)
         engine.listener = object : TtsEngine.Listener {
             override fun onStart(engine: TtsEngineKind) = Unit
@@ -282,22 +291,19 @@ class DeviceProgressiveReadProtocolTest {
         }
 
         engine.speak(passage)
-        // The engine plays each piece; with 256-byte stubs the whole passage is fast.
-        completed.await(20, TimeUnit.SECONDS)
+        val finished = completed.await(30, TimeUnit.SECONDS)
         engine.shutdown()
 
-        val requests = generateSequence { server.takeRequest(1, TimeUnit.SECONDS) }.toList()
-        assertTrue(
-            "only ${requests.size} request(s) reached the server; the read did not " +
-                "continue past the opening piece",
-            requests.size > 1,
-        )
-        val pieces = SpeechChunker.splitForStreaming(passage)
-        assertTrue(
-            "the passage should need several requests, was ${pieces.size}",
-            pieces.size > 1,
+        assertTrue("the read never finished; it stopped after some piece", finished)
+        val requests = generateSequence { server.takeRequest(500, TimeUnit.MILLISECONDS) }.toList()
+        assertEquals(
+            "every piece must be requested exactly once: stopping early drops the rest " +
+                "of the passage, and a repeat would play it twice",
+            pieces.size,
+            requests.size,
         )
     }
+
 }
 
 /**
@@ -321,6 +327,29 @@ private class FakeSettingsForDevice(
  */
 private class NoopPlayer : AudioPlayer {
     override fun play(file: File, onCompletion: () -> Unit, onError: (String) -> Unit): Boolean = true
+    override fun pause(): Boolean = true
+    override fun resume(): Boolean = true
+    override fun currentPositionMs(): Int = 0
+    override fun isPlaying(): Boolean = true
+    override fun stop() = Unit
+}
+
+/**
+ * A player that finishes each piece shortly after starting it.
+ *
+ * Completion is reported from a separate thread, because the real `MediaPlayer`
+ * reports it asynchronously and a synchronous callback would re-enter the engine from
+ * inside its own `play` call. The delay is tiny: the stub audio is 256 bytes, so
+ * "played" is instantaneous in any real sense.
+ */
+private class CompletingPlayer : AudioPlayer {
+    override fun play(file: File, onCompletion: () -> Unit, onError: (String) -> Unit): Boolean {
+        Thread {
+            Thread.sleep(5)
+            onCompletion()
+        }.start()
+        return true
+    }
     override fun pause(): Boolean = true
     override fun resume(): Boolean = true
     override fun currentPositionMs(): Int = 0
