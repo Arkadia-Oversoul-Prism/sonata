@@ -7,6 +7,130 @@
 
 ---
 
+# 0.1 Round seven — the instrumented suites finally run, and voices you can hear
+
+**Base:** `8a12970624e02f1d6de27a4f9e3f6da90ca27d4e` (default branch, unchanged)
+**Branch:** `feat/sonata-ux-and-playback-overhaul`
+**Pull request:** [#4](https://github.com/Arkadia-Oversoul-Prism/sonata/pull/4)
+
+The founder asked for three things this round: run the instrumented suites on an
+emulator, stop offering voices that fail with HTTP 502, and make the voice sound less
+robotic. Two were done as asked. The third turned out to be impossible on the current
+backend, and the evidence for that is below.
+
+## 0.1.1 The instrumented suites run for the first time
+
+Three `androidTest` suites have existed since the beginning and had **never once
+executed**. CI compiled them — so the sources could not rot — but nothing ran them.
+That is the same gap that made the floating-player crash take three rounds of reading
+and guarding code without ever observing it.
+
+The new `instrumented-tests` job runs `connectedDebugAndroidTest` on an API 34
+`google_apis` x86_64 emulator via `reactivecircus/android-emulator-runner`. It is a
+separate job from `build`, so an emulator failure is its own signal rather than
+something that can hide behind, or mask, the unit suite, lint and APK steps.
+
+**Evidence (execution, not inspection).** Workflow run
+[`40330605140`](https://github.com/Arkadia-Oversoul-Prism/sonata/actions/runs/40330605140),
+job `Instrumented tests (API 34 emulator)`, all steps `success`, and the log contains:
+
+```
+> Task :app:connectedDebugAndroidTest
+Starting 20 tests on emulator-5554 - 14
+BUILD SUCCESSFUL in 1m 49s
+OK: killing emulator, bye bye
+```
+
+20 device tests, on a real Android runtime. This covers what Robolectric structurally
+cannot: the platform `TextToSpeech` engine's real readiness behaviour, real audio
+decoding, and real cache-directory semantics. Robolectric has no compositor and no real
+TTS engine — which is exactly why it could not have caught the window-visibility class
+of bug the founder is worried about, and why this job matters.
+
+## 0.1.2 Voices that fail are no longer offered
+
+`GET /api/tts/status` lists seven voices. Four work; `george` and `ryan` return HTTP 502
+reproducibly (`Edge: No audio was received; Piper voice not loaded`), and `aetheria` is
+not a distinct voice at all (below). `BackendConfig.VOICES` now offers `aria`, `jenny`,
+`sonia`, `christopher`. A stored preference naming a removed voice resolves to a working
+one rather than sending a request the gateway will answer with 502.
+
+## 0.1.3 "Hear it" — audition a voice before choosing it
+
+Choosing a voice from a list of names is guesswork, and "the others sound robotic" is a
+judgement no label can support. The gateway synthesises four voices and they differ
+audibly, so the only honest way to choose one is to hear it. **Hear it** now sits beside
+the picker and plays a three-sentence sample of the selected voice — per voice, not one
+generic line, because a voice can sound fine on a short phrase and wear out over a
+paragraph.
+
+A preview is deliberately not a read: its own action, its own command type, no
+foreground claim (a one-second sample that leaves a notification behind is worse than
+the sample is good), and a finished preview is never reported as a finished read.
+
+Writing the tests found a real defect. The first version asserted a preview leaves the
+passage untouched and it **failed**: `preview` supersedes the engine, because two audio
+streams cannot play at once, so auditioning a voice mid-read stops the read. That is
+unavoidable; silently losing the user's place is not. The activity now records the
+position before dispatching a preview, so **Carry on** brings the user back.
+
+## 0.1.4 The "more emotionally alive voice" request — measured, and not deliverable here
+
+This is the honest part. The request was for something closer to ElevenLabs. Every
+expressiveness route was probed and measured; none of them works on the current backend.
+
+| What was tried | Result | How it was measured |
+| --- | --- | --- |
+| `GET /api/tts/status` | `engine: edge_tts`, `elevenlabs_active: false`, `key_pool.total: 0` | authoritative endpoint |
+| SSML `<mstts:express-as style='cheerful'>` + `prosody pitch='+15%'` | **silently ignored** — f0 190.9 Hz and 2.76 s, identical to plain text | acoustic: f0 + duration |
+| top-level `pitch: "+10Hz"` / `"-10Hz"` | **silently ignored** — f0 216.2 Hz for both, same as baseline | acoustic: f0 |
+| top-level `emotion: "happy"` | **silently ignored** — f0 216.2 Hz, same as baseline | acoustic: f0 |
+| `speed: 0.7 / 1.0 / 1.5` | **works** — 7.06 s / 4.97 s / 3.34 s | acoustic: duration |
+
+So `voice` and `speed` are the only expressive controls the gateway honours. No style or
+emotion control was added: it would be attractive, inert UI, which is worse than none.
+`pitch` already existed in the app and is correctly labelled "device voice only" — it
+affects only the offline engine, which the measurements now confirm is accurate.
+
+One methodological note that matters for anyone repeating this: **the gateway is
+non-deterministic.** Three identical requests returned three different byte streams
+(different MD5s), so a byte-comparison test would have proved nothing either way. The
+findings above rest on acoustic measurements — fundamental frequency and duration —
+which survive that non-determinism. `aetheria` and `aria` returned byte streams of the
+same length and identical f0 *and* identical duration, and the gateway's own catalogue
+shows both map to `en-US-AriaNeural`; `aetheria` is a relabelled duplicate, not a
+different voice.
+
+## 0.1.5 The substrate vision — what is reachable, and what is not
+
+The founder described a much larger system: a music pipeline, an intent/understanding
+engine, voice swapping. That was treated as a direction to map rather than a licence to
+invent. The gateway's own OpenAPI document (288 endpoints) shows the substrate exists,
+and the reachable boundary is:
+
+| Endpoint | Reachable from the app? |
+| --- | --- |
+| `GET /api/lab/engineering/n-atlas/catalog` | **Yes**, 200. Provider `n_atlas`, `configured: true`, `status: AVAILABLE`, `cost_note: "cost not asserted; provider tiers are not assumed free"` |
+| `POST /api/lab/engineering/n-atlas/run` | No — 401 |
+| `GET /api/lab/engineering/voice` | No — 401 |
+| `POST /api/lab/engineering/voice/resolve` | No — 401 |
+| `GET /solspire/voice/status` | No — 401 |
+| `GET /solspire/voice/providers` | No — 401 |
+| `/solspire/voice/events/{id}/understand` | No — 401 |
+
+There is **no music endpoint** in the published API at all. The music-to-device pipeline
+the founder described is not an API that exists and is unreachable; as far as the
+published surface shows, it does not exist yet.
+
+The honest summary: the substrate is real and the app's one public anchor into it is the
+N-ATLAS catalogue. Everything with actual capability behind it requires authentication,
+which the app does not have and must not be given by embedding a credential in an APK.
+Building music or intent UI against endpoints that return 401 would be the "attractive
+but inert" failure this run is explicitly trying to avoid. The integration path is a
+backend-side authenticated route, which is an Arkadia decision, not a Sonata one.
+
+---
+
 # 0. Latest run — immediate-start playback, floating player, UX overhaul
 
 **Base:** `8a12970624e02f1d6de27a4f9e3f6da90ca27d4e` (default branch, unchanged)
