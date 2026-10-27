@@ -175,6 +175,49 @@ the test, not the engine**:
 
 A passing test that never reaches its assertion is worth less than a failing one.
 
+## 0.1.3d The acceptance gate is now tested, not assumed
+
+The founder's acceptance gate names one boundary explicitly: the interaction between
+Sonata's 100,000-character accepted ceiling and the gateway's 5,000-character per-request
+truncation, with the note that "a successful build alone cannot establish this."
+
+It could not, and it was not established. The largest chunking fixture was **10,000
+characters** — an order of magnitude below the ceiling — so the boundary was entirely
+unexercised. Nothing tested the seam.
+
+Two limits meet there and must not be conflated:
+
+| Limit | Value | Failure mode past it |
+|---|---|---|
+| `MAX_INPUT_CHARS` | 100,000 | Sonata truncates and **tells the user** |
+| `MAX_TTS_CHARS` | 5,000 | Backend truncates **silently**, returns 200 with audio for the first 5,000 |
+
+The new test runs the real two-stage path — `TextLimits.validate` then
+`SpeechChunker.splitForStreaming` — rather than either stage alone. A bug in the seam
+between two different ceilings is invisible from outside: it presents to the user as text
+that simply stopped, which is the original defect.
+
+Asserted at ceiling scale: validation cuts to exactly `MAX_INPUT_CHARS`; the passage
+becomes many requests; every request stays under `MAX_TTS_CHARS`; joining them reproduces
+the validated text exactly; the opening piece is still short.
+
+### The assertion was checked by mutation, not assumed
+
+A test that passes is not evidence it can fail. Two mutations of the production chunker,
+both caught:
+
+| Mutation | Simulates | Result |
+|---|---|---|
+| `STREAM_LATER_LIMIT` 900 → 6000 | a piece the backend silently truncates | **FAILED** |
+| skip one char at each boundary | a read that drops text | **FAILED** |
+
+Production source restored exactly (`git diff` empty). Full suite: **151 tests, 0 failures,
+0 skipped.**
+
+This closes the local half of the acceptance gate. It does **not** close the device half —
+whether the read sounds right, survives app switching, and resumes correctly is still a
+physical-device question, and remains open.
+
 ## 0.1.4 The "more emotionally alive voice" request — measured, and not deliverable here
 
 This is the honest part. The request was for something closer to ElevenLabs. Every
