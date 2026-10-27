@@ -97,24 +97,63 @@ notice, reversible and cheap; deletion is not, and MIE has not been migrated.
 recreates the original problem one directory down. The migration is its own slice with
 its own tests — see `E5-VOICE-CONTRACT.md` §5. It is not part of the reading work.
 
-## 5. Ordering constraint
+## 5. Agreed execution sequence
 
-The diagnostic's checklist puts reconciliation at step A, before accepting the reading
-journey at step B. That order should be **inverted**.
+The diagnostic's checklist put reconciliation at step A, before accepting the reading
+journey at step B. That order is **inverted**, and the inversion is now agreed on both
+sides.
 
 Reconciliation touches build files, source trees and CI references. Doing it while the
-reading candidate is unaccepted means the reading candidate would need re-verification
-against a moved tree, and a failure would be ambiguous — the regression could come from
-either the reconciliation or the reading change. Accepting first keeps the two separable.
+reading candidate is unaccepted means the candidate would need re-verification against a
+moved tree, and any failure would be ambiguous — the regression could come from either the
+reconciliation or the reading change. Accepting first keeps the two separable.
 
-Correct order:
+The agreed sequence:
 
-1. **Accept the reading journey** on the physical device (diagnostic step B).
-2. **Merge the accepted candidate** (step C, human authorization).
-3. **Then** reconcile the trees (step A), with the reading baseline stable and CI green.
+1. **Accept the reading journey.** Physical device: cross-app floating-player behaviour and
+   the complete long-passage workflow.
+2. **Authorize and complete integration.** Reconcile the final commit, checks and review
+   evidence; merge only after acceptance and explicit authorization.
+3. **Freeze the legacy development target.** Add the notice to `Arkadia/sonata-android`
+   through an authorized change in the Arkadia repository; verify its build consumers
+   separately.
+4. **Migrate MIE and the signed release pipeline** into the canonical repository, without
+   maintaining two divergent implementations. Preserve the verified signing workflow and
+   test the migrated result.
 
-Reconciliation is not urgent. Nothing is blocked by `sonata-android` existing: it is
-stale, not conflicting, and its CI does not gate the dedicated repository.
+Steps 3 and 4 are not urgent. Nothing is blocked by `sonata-android` existing: it is stale,
+not conflicting, and its CI does not gate the dedicated repository. The immediate goal is
+narrow — finish the dependable reading experience, preserve the existing assets, then
+consolidate.
+
+This ordering avoids both extremes named in the review: freezing Sonata as a basic TTS
+utility forever, or destabilizing a nearly accepted reading experience by migrating the
+whole Arkadia voice ecosystem at once.
+
+## 5a. Status: pushed and green is not merged and accepted
+
+Recorded explicitly, because the two are easy to conflate and this project has already
+been misread once in exactly that way.
+
+Measured 2026-10-27:
+
+| Fact | Value |
+|---|---|
+| Remote HEAD of the feature branch | `badb3859c5f55e0095cdbb33f927df6615390697` |
+| PR #4 state | `open`, `draft: true`, `merged_at: null` |
+| PR #4 base | `feature/sonata-tts-app` @ `8a129706…` |
+| PR #4 mergeable | `true`, `mergeable_state: clean` |
+| CI on `badb385` | success (runs `40496570303`, `40496565070`) |
+| Default branch | `feature/sonata-tts-app`, unchanged |
+| Physical-device acceptance | **not performed** |
+
+So: the work is published and its checks pass. It is **not** merged, **not** released, and
+**not** device-accepted. The release APK builds unsigned. A green check on a draft branch is
+not an accepted product.
+
+The `mergeable: clean` field is worth noting for step 2 — the branch is not merely
+unmerged, it is currently free of conflicts against its base, so integration is available
+whenever acceptance occurs.
 
 ## 6. Freeze notice
 
@@ -134,3 +173,25 @@ Before `archive/legacy_android/sonata/` is treated as settled, its remaining con
 must be verified — CI workflows, Gradle settings, documentation links. That check is not
 performed here because it requires the Arkadia tree, which is outside this run's
 authorization. Stating it as outstanding rather than assuming it is clean.
+
+## 8. The strategic shape
+
+The product sequence is not `reader → voice assistant`. It is:
+
+> reliable listening → preserved musical and knowledge capabilities → governed voice
+> interaction
+
+The middle step is the one most likely to be skipped, and skipping it is what would make
+Sonata a basic TTS utility rather than Arkadia's voice interface. MIE and the knowledge
+activities already exist; they need migrating, not reinventing.
+
+The Solspire lifecycle — `understand → propose → decision → revise → authorize → execute →
+verify` — is a promising architectural shape for the final layer. It is not an available
+Sonata integration today (see `E5-VOICE-CONTRACT.md` §4), but it gives Arkadia a concrete
+target for the contract it needs to publish. The reason it is promising is the separation
+of `authorize` from `execute` and `verify` from `execute`: that is the structure required
+to keep "spoken" and "done" distinguishable, which is the same discipline this project
+already applies to its own progress reporting.
+
+The immediate goal stays narrow: finish the dependable reading experience, preserve the
+existing assets, then consolidate on a stable foundation.
