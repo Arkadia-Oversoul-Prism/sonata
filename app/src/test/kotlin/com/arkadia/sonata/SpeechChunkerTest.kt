@@ -159,4 +159,65 @@ class SpeechChunkerTest {
             )
         }
     }
+
+    /**
+     * The acceptance gate, end to end: the largest passage Sonata accepts, read whole.
+     *
+     * Every other test here uses a fixture one or two orders of magnitude smaller — the
+     * largest is 10,000 characters against an accepted ceiling of 100,000. That leaves
+     * the boundary the founder named as a risk entirely unexercised.
+     *
+     * Two limits meet here and must not be conflated:
+     *
+     *  - `MAX_INPUT_CHARS` (100,000) is what *Sonata* accepts. Past it, input is truncated
+     *    and the user is told.
+     *  - `MAX_TTS_CHARS` (5,000) is what one *backend request* survives. Past it,
+     *    `kernel/tts.py::synthesize` truncates silently and returns 200 with audio for the
+     *    first 5,000 characters — no error the client could notice.
+     *
+     * So the real path is two stages: validate (which may truncate at 100,000), then split
+     * (which must keep every request under 5,000). This runs that path rather than either
+     * stage alone, because a bug in the seam — validating at one ceiling and splitting at
+     * the other — is invisible from outside and would present to the user as text that
+     * simply stopped.
+     */
+    @Test
+    fun `a passage at the full accepted ceiling survives validate-then-split, whole`() {
+        // Comfortably past the accepted ceiling, so the truncation stage is exercised.
+        val offered = (1..4000).joinToString(" ") { "Sentence number $it ends here." }
+
+        val validated = when (val v = TextLimits.validate(offered)) {
+            is TextValidation.Ready -> v.text
+            is TextValidation.Truncated -> v.text
+            is TextValidation.Empty -> error("fixture must not be blank")
+        }
+        assertEquals(
+            "input past the ceiling must be cut to exactly the ceiling",
+            MAX_INPUT_CHARS,
+            validated.length,
+        )
+        assertTrue("the fixture must genuinely exceed the ceiling", offered.length > MAX_INPUT_CHARS)
+
+        val pieces = SpeechChunker.splitForStreaming(validated)
+
+        assertTrue(
+            "a ceiling-length passage must need many requests, was ${pieces.size}",
+            pieces.size > 10,
+        )
+        assertEquals(
+            "nothing may be lost, duplicated or reordered across the whole passage",
+            validated,
+            pieces.joinToString(""),
+        )
+        pieces.forEach {
+            assertTrue(
+                "a piece of ${it.length} would be silently truncated by the backend",
+                it.length <= MAX_TTS_CHARS,
+            )
+        }
+        assertTrue(
+            "the opening piece must still be short, or first sound is delayed",
+            pieces.first().length <= SpeechChunker.STREAM_FIRST_LIMIT,
+        )
+    }
 }
