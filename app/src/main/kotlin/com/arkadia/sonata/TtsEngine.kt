@@ -167,6 +167,9 @@ class TtsEngine(
     /** In-flight fetches, keyed by piece index. */
     private val fetchJobs = ConcurrentHashMap<Int, Job>()
 
+    /** Serialises the check-and-register in [fetchSegment]. */
+    private val fetchLock = Any()
+
     /** Pieces whose fetch failed, with the reason, so the read can fall back. */
     private val failed = ConcurrentHashMap<Int, String>()
 
@@ -584,60 +587,75 @@ class TtsEngine(
         }
     }
 
+    /**
+     * Fetch [index] unless it is already staged or already being fetched.
+     *
+     * The check and the registration happen inside one lock, because two callers can
+     * reach the same index concurrently: a completion callback and a prefetch both
+     * call `schedulePrefetch()`. A check-then-set guard would let both through and
+     * issue the same request twice.
+     *
+     * A duplicate request is not merely wasteful. It synthesises the piece again, so
+     * on a metered connection and a paid provider it costs real money, and a repeated
+     * piece mid-passage is audible.
+     */
     private fun fetchSegment(myGeneration: Int, url: String, index: Int) {
         if (index !in segments.indices) return
-        val segment = segments[index]
 
-        val job = scope.launch {
-            val result = transport.fetch(
-                text = segment.text,
-                voice = settings.voice,
-                speed = effectiveSpeed(),
-                baseUrl = url,
-            )
+        synchronized(fetchLock) {
+            if (staged.containsKey(index) || fetchJobs.containsKey(index)) return
 
-            // Superseded while the request was in flight: drop the result.
-            if (myGeneration != generation || !isActive) return@launch
+            fetchJobs[index] = scope.launch {
+                val segment = segments[index]
 
-            when (result) {
-                is SynthesisResult.Success -> {
-                    val file = try {
-                        writeTempFile(result.bytes)
-                    } catch (e: Exception) {
-                        Log.w(TAG, "could not stage piece $index: ${e.message}")
-                        withContext(mainDispatcher) {
-                            if (myGeneration == generation) {
-                                onSegmentFailed(index, "Could not store audio")
+                val result = transport.fetch(
+                    text = segment.text,
+                    voice = settings.voice,
+                    speed = effectiveSpeed(),
+                    baseUrl = url,
+                )
+
+                // Superseded while the request was in flight: drop the result.
+                if (myGeneration != generation || !isActive) return@launch
+
+                when (result) {
+                    is SynthesisResult.Success -> {
+                        val file = try {
+                            writeTempFile(result.bytes)
+                        } catch (e: Exception) {
+                            Log.w(TAG, "could not stage piece $index: ${e.message}")
+                            withContext(mainDispatcher) {
+                                if (myGeneration == generation) {
+                                    onSegmentFailed(index, "Could not store audio")
+                                }
                             }
+                            return@launch
                         }
-                        return@launch
+
+                        // Take ownership synchronously, with no suspension point between
+                        // staging and this assignment. From here every cancellation path
+                        // (a new speak, stop, shutdown) runs supersede(), which deletes
+                        // everything staged — so a cancellation landing during the hop to
+                        // the main dispatcher cannot orphan the file.
+                        staged[index] = file
+
+                        withContext(mainDispatcher) {
+                            fetchJobs.remove(index)
+                            if (myGeneration != generation) {
+                                staged.remove(index)?.delete()
+                                return@withContext
+                            }
+                            onSegmentReady(index)
+                        }
                     }
 
-                    // Take ownership synchronously, with no suspension point between
-                    // staging and this assignment. From here every cancellation path
-                    // (a new speak, stop, shutdown) runs supersede(), which deletes
-                    // everything staged — so a cancellation landing during the hop to
-                    // the main dispatcher cannot orphan the file.
-                    staged[index] = file
-
-                    withContext(mainDispatcher) {
+                    is SynthesisResult.Failure -> withContext(mainDispatcher) {
                         fetchJobs.remove(index)
-                        if (myGeneration != generation) {
-                            staged.remove(index)?.delete()
-                            return@withContext
-                        }
-                        onSegmentReady(index)
+                        if (myGeneration == generation) onSegmentFailed(index, result.reason)
                     }
-                }
-
-                is SynthesisResult.Failure -> withContext(mainDispatcher) {
-                    fetchJobs.remove(index)
-                    if (myGeneration == generation) onSegmentFailed(index, result.reason)
                 }
             }
         }
-
-        fetchJobs[index] = job
     }
 
     /** A piece has been synthesised and staged. */
