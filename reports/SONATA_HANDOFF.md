@@ -218,6 +218,63 @@ This closes the local half of the acceptance gate. It does **not** close the dev
 whether the read sounds right, survives app switching, and resumes correctly is still a
 physical-device question, and remains open.
 
+## 0.1.3e A duplicate-request race, found by CI and fixed
+
+While verifying the commits above, a CI run on `e8f2aa3` failed the emulator job:
+
+```
+p3_8_the_whole_passage_is_read_not_just_the_opening_piece[emulator-5554 - 14] FAILED
+  java.lang.AssertionError: every piece must be requested exactly once: stopping early
+  drops the rest of the passage, and a repeat would play it twice
+  expected:<13> but was:<14>
+```
+
+The **same commit** passed on a `pull_request` run. That is the shape of a flake, and the
+tempting move is to re-run it and move on. It is not a flake.
+
+### Root cause
+
+In `fetchSegment`, the in-flight marker was written **after** the coroutine was launched:
+
+```kotlin
+// schedulePrefetch
+if (staged.containsKey(i) || fetchJobs.containsKey(i)) continue
+// fetchSegment
+val job = scope.launch { ... }
+fetchJobs[index] = job          // too late — the guard already passed
+```
+
+Two callers reach the same index concurrently: a piece completion (`onSegmentFinished`)
+and a prefetch (`onSegmentReady`) both call `schedulePrefetch()`. Each passes the check
+before either registers, so both launch and the piece is synthesised **twice**. Which side
+wins is pure timing, which is exactly why the same SHA passed or failed depending on the
+machine.
+
+### Why this was fixed rather than tolerated
+
+- It synthesises a piece twice on a paid provider over a metered connection — real cost.
+- A repeated piece mid-passage is **audible**. This is a user-facing defect, not just a
+  wasted request.
+- The test that caught it asserts precisely the property the founder's acceptance gate
+  names: *"finish without silently skipped text or falsely reported completion."* The gate
+  was already doing its job; the failure was real.
+
+### Fix and evidence
+
+One lock now spans the check and the registration, so a single caller owns each index.
+
+| Evidence | Result |
+|---|---|
+| Run `40580472996` (push, `e8f2aa3`) | **FAILED** — 14 requests for 13 pieces |
+| Run `40580482026` (pull_request, `e8f2aa3`) | success — same SHA |
+| Run `40583283663` (push, `1fa9648`) | success — emulator job green |
+| Run `40583292805` (pull_request, `1fa9648`) | success — emulator job green |
+| Local `compileDebugKotlin` + `testDebugUnitTest` | pass, 151 tests |
+
+The failed run is kept deliberately: a defect that only appears on one machine is the
+easiest kind to lose, and the pair of runs on one SHA is the proof it was a race rather
+than a bad test.
+
 ## 0.1.4 The "more emotionally alive voice" request — measured, and not deliverable here
 
 This is the honest part. The request was for something closer to ElevenLabs. Every
