@@ -85,4 +85,139 @@ class SpeechChunkerTest {
         pieces.forEach { assertTrue(it.length <= 1000) }
         assertEquals(text, pieces.joinToString(""))
     }
+
+    // ── Streaming split ───────────────────────────────────────────────────────
+
+    /**
+     * The load-bearing invariant for progressive playback: a passage read piece by
+     * piece must still be read in full and in order. Without this a long selection
+     * would silently lose or repeat content at the seams.
+     */
+    @Test
+    fun `streaming split reproduces the input exactly`() {
+        val text = (1..400).joinToString(" ") { "Sentence number $it ends here." }
+        assertEquals(text, SpeechChunker.splitForStreaming(text).joinToString(""))
+    }
+
+    @Test
+    fun `streaming split reproduces an unbroken run of characters exactly`() {
+        // No boundary anywhere: every seam is a hard cut, which is where an
+        // off-by-one would drop or duplicate a character.
+        val text = "z".repeat(10_000)
+        val pieces = SpeechChunker.splitForStreaming(text)
+        assertEquals(text, pieces.joinToString(""))
+        assertTrue("expected many pieces", pieces.size > 5)
+    }
+
+    @Test
+    fun `the first streaming piece is short so audio can start early`() {
+        val text = (1..400).joinToString(" ") { "Sentence number $it ends here." }
+        val pieces = SpeechChunker.splitForStreaming(text)
+        assertTrue(
+            "first piece was ${pieces[0].length}, which would delay the first sound",
+            pieces[0].length <= SpeechChunker.STREAM_FIRST_LIMIT,
+        )
+    }
+
+    @Test
+    fun `the first streaming piece is never a fragment`() {
+        // A first piece of one word would be over before the next was ready.
+        val text = ("x".repeat(200) + ". ") + ("y".repeat(5000))
+        val pieces = SpeechChunker.splitForStreaming(text)
+        assertTrue(
+            "first piece was only ${pieces[0].length} characters",
+            pieces[0].length >= SpeechChunker.STREAM_MIN_FIRST,
+        )
+    }
+
+    @Test
+    fun `text shorter than the first limit is a single piece`() {
+        val text = "A short sentence."
+        assertEquals(listOf(text), SpeechChunker.splitForStreaming(text))
+    }
+
+    @Test
+    fun `streaming pieces after the first are larger than the first`() {
+        // The later pieces are prefetched during playback, so they can be bigger;
+        // that keeps the request count down on a long passage.
+        val text = (1..400).joinToString(" ") { "Sentence number $it ends here." }
+        val pieces = SpeechChunker.splitForStreaming(text)
+        assertTrue(pieces.size > 2)
+        assertTrue(
+            "later pieces should exceed the first limit",
+            pieces.drop(1).any { it.length > SpeechChunker.STREAM_FIRST_LIMIT },
+        )
+    }
+
+    @Test
+    fun `every streaming piece fits within one backend request`() {
+        val text = (1..800).joinToString(" ") { "Sentence number $it ends here." }
+        SpeechChunker.splitForStreaming(text).forEach {
+            assertTrue(
+                "a piece of ${it.length} would be truncated by the backend",
+                it.length <= MAX_TTS_CHARS,
+            )
+        }
+    }
+
+    /**
+     * The acceptance gate, end to end: the largest passage Sonata accepts, read whole.
+     *
+     * Every other test here uses a fixture one or two orders of magnitude smaller — the
+     * largest is 10,000 characters against an accepted ceiling of 100,000. That leaves
+     * the boundary the founder named as a risk entirely unexercised.
+     *
+     * Two limits meet here and must not be conflated:
+     *
+     *  - `MAX_INPUT_CHARS` (100,000) is what *Sonata* accepts. Past it, input is truncated
+     *    and the user is told.
+     *  - `MAX_TTS_CHARS` (5,000) is what one *backend request* survives. Past it,
+     *    `kernel/tts.py::synthesize` truncates silently and returns 200 with audio for the
+     *    first 5,000 characters — no error the client could notice.
+     *
+     * So the real path is two stages: validate (which may truncate at 100,000), then split
+     * (which must keep every request under 5,000). This runs that path rather than either
+     * stage alone, because a bug in the seam — validating at one ceiling and splitting at
+     * the other — is invisible from outside and would present to the user as text that
+     * simply stopped.
+     */
+    @Test
+    fun `a passage at the full accepted ceiling survives validate-then-split, whole`() {
+        // Comfortably past the accepted ceiling, so the truncation stage is exercised.
+        val offered = (1..4000).joinToString(" ") { "Sentence number $it ends here." }
+
+        val validated = when (val v = TextLimits.validate(offered)) {
+            is TextValidation.Ready -> v.text
+            is TextValidation.Truncated -> v.text
+            is TextValidation.Empty -> error("fixture must not be blank")
+        }
+        assertEquals(
+            "input past the ceiling must be cut to exactly the ceiling",
+            MAX_INPUT_CHARS,
+            validated.length,
+        )
+        assertTrue("the fixture must genuinely exceed the ceiling", offered.length > MAX_INPUT_CHARS)
+
+        val pieces = SpeechChunker.splitForStreaming(validated)
+
+        assertTrue(
+            "a ceiling-length passage must need many requests, was ${pieces.size}",
+            pieces.size > 10,
+        )
+        assertEquals(
+            "nothing may be lost, duplicated or reordered across the whole passage",
+            validated,
+            pieces.joinToString(""),
+        )
+        pieces.forEach {
+            assertTrue(
+                "a piece of ${it.length} would be silently truncated by the backend",
+                it.length <= MAX_TTS_CHARS,
+            )
+        }
+        assertTrue(
+            "the opening piece must still be short, or first sound is delayed",
+            pieces.first().length <= SpeechChunker.STREAM_FIRST_LIMIT,
+        )
+    }
 }

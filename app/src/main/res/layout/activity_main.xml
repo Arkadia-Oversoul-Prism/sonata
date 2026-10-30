@@ -1,209 +1,473 @@
 <?xml version="1.0" encoding="utf-8"?>
-<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+<!--
+  The reading screen.
+
+  One screen, one job: text in, speech out. The structure answers the five
+  questions a listening user actually has, in the order they have them:
+
+    1. What am I reading?      -> the passage surface
+    2. What is happening?      -> the state line and progress bar
+    3. How do I control it?    -> one large primary control
+    4. Which voice is this?    -> a quiet voice row
+    5. How do I keep listening
+       while I do something
+       else?                    -> the float control
+
+  Everything else is behind More. There is no second screen.
+-->
+<androidx.coordinatorlayout.widget.CoordinatorLayout
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:id="@+id/rootLayout"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:background="@color/bg_dark"
-    android:fillViewport="true">
+    android:background="@color/bg_dark">
 
-    <LinearLayout
+    <ScrollView
+        android:id="@+id/scrollBody"
         android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:orientation="vertical"
-        android:padding="18dp">
-
-        <!-- Header: identity, and the live state in one line. -->
-        <TextView
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text="SONATA"
-            android:textColor="@color/accent_teal"
-            android:textSize="13sp"
-            android:letterSpacing="0.25" />
-
-        <TextView
-            android:id="@+id/tvState"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="4dp"
-            android:text="Ready"
-            android:textColor="@color/text_primary"
-            android:textSize="22sp"
-            android:textStyle="bold" />
-
-        <!-- The one thing this app does: text in, speech out. -->
-        <EditText
-            android:id="@+id/etText"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:minHeight="180dp"
-            android:layout_marginTop="14dp"
-            android:gravity="top|start"
-            android:inputType="textMultiLine|textCapSentences"
-            android:hint="Paste or type anything to hear it"
-            android:textColorHint="@color/text_dim"
-            android:textColor="@color/text_primary"
-            android:textSize="15sp"
-            android:lineSpacingExtra="4dp"
-            android:background="@drawable/bg_input"
-            android:padding="14dp" />
-
-        <!-- Voice + speed on one quiet row. -->
-        <LinearLayout
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:orientation="horizontal"
-            android:gravity="center_vertical"
-            android:layout_marginTop="12dp">
-
-            <Spinner
-                android:id="@+id/spinnerVoice"
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_weight="1" />
-
-            <TextView
-                android:id="@+id/tvSpeed"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_marginStart="10dp"
-                android:paddingStart="10dp"
-                android:paddingEnd="10dp"
-                android:paddingTop="6dp"
-                android:paddingBottom="6dp"
-                android:text="1.0×"
-                android:textColor="@color/text_secondary"
-                android:textSize="13sp"
-                android:background="@drawable/bg_input" />
-        </LinearLayout>
-
-        <!-- Primary actions. -->
-        <LinearLayout
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:orientation="horizontal"
-            android:layout_marginTop="14dp">
-
-            <Button
-                android:id="@+id/btnPlay"
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_weight="2"
-                android:layout_marginEnd="5dp"
-                android:text="▶  Read"
-                android:backgroundTint="@color/accent_teal"
-                android:textColor="@color/bg_dark" />
-
-            <Button
-                android:id="@+id/btnStop"
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_weight="1"
-                android:layout_marginStart="5dp"
-                android:text="Stop"
-                android:enabled="false" />
-        </LinearLayout>
+        android:layout_height="match_parent"
+        android:fillViewport="true"
+        android:clipToPadding="false"
+        android:scrollbars="none">
 
         <LinearLayout
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:orientation="horizontal"
-            android:layout_marginTop="6dp">
-
-            <Button
-                android:id="@+id/btnFloat"
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_weight="1"
-                android:layout_marginEnd="5dp"
-                android:text="⤢  Float"
-                android:textSize="12sp" />
-
-            <Button
-                android:id="@+id/btnMore"
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_weight="1"
-                android:layout_marginStart="5dp"
-                android:text="⚙  More"
-                android:textSize="12sp" />
-        </LinearLayout>
-
-        <!-- Everything optional lives here, collapsed. No second screen. -->
-        <LinearLayout
-            android:id="@+id/panelMore"
+            android:id="@+id/scrollContent"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:orientation="vertical"
-            android:layout_marginTop="12dp"
-            android:padding="14dp"
-            android:background="@drawable/bg_input"
-            android:visibility="gone">
+            android:paddingStart="@dimen/gutter"
+            android:paddingEnd="@dimen/gutter"
+            android:paddingTop="@dimen/space_lg"
+            android:paddingBottom="@dimen/space_xl">
+
+            <!-- ── Header ────────────────────────────────────────────────── -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:gravity="center_vertical">
+
+                <ImageView
+                    android:layout_width="20dp"
+                    android:layout_height="20dp"
+                    android:src="@drawable/ic_wave"
+                    app:tint="@color/accent_teal"
+                    android:importantForAccessibility="no" />
+
+                <TextView
+                    style="@style/Text.Sonata.Wordmark"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="@dimen/space_sm"
+                    android:text="@string/app_name" />
+
+                <View
+                    android:layout_width="0dp"
+                    android:layout_height="1dp"
+                    android:layout_weight="1" />
+
+                <TextView
+                    android:id="@+id/tvVoiceBadge"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:textColor="@color/text_dim"
+                    android:textSize="@dimen/text_meta"
+                    android:background="@drawable/bg_pill"
+                    android:paddingStart="@dimen/space_md"
+                    android:paddingEnd="@dimen/space_md"
+                    android:paddingTop="@dimen/space_xs"
+                    android:paddingBottom="@dimen/space_xs" />
+            </LinearLayout>
+
+            <!-- ── What is happening ─────────────────────────────────────── -->
+            <TextView
+                android:id="@+id/tvState"
+                style="@style/Text.Sonata.Display"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="@dimen/space_lg"
+                android:text="@string/state_ready" />
 
             <TextView
-                android:layout_width="wrap_content"
+                android:id="@+id/tvSubstate"
+                style="@style/Text.Sonata.Label"
+                android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:text="SPEED"
+                android:layout_marginTop="@dimen/space_xs"
+                android:minHeight="18dp"
+                android:text="@string/substate_ready" />
+
+            <!-- Real progress through the passage. GONE until a read is planned,
+                 so it is never a decorative bar that says nothing. -->
+            <ProgressBar
+                android:id="@+id/progressRead"
+                style="@style/Progress.Sonata"
+                android:layout_width="match_parent"
+                android:layout_height="4dp"
+                android:layout_marginTop="@dimen/space_md"
+                android:visibility="gone" />
+
+            <!-- ── The passage ────────────────────────────────────────────
+                 The largest, most inviting thing on the screen: the user is here
+                 to read or to paste. It grows with its content up to a ceiling so
+                 a short selection does not leave a huge empty well. -->
+            <EditText
+                android:id="@+id/etText"
+                style="@style/Text.Sonata.Body"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:minHeight="200dp"
+                android:maxHeight="420dp"
+                android:layout_marginTop="@dimen/space_lg"
+                android:gravity="top|start"
+                android:inputType="textMultiLine|textCapSentences"
+                android:hint="@string/hint_passage"
+                android:textColorHint="@color/text_dim"
+                android:textSize="17sp"
+                android:background="@drawable/bg_surface_flat"
+                android:padding="@dimen/space_lg"
+                android:scrollbars="vertical"
+                android:importantForAutofill="no"
+                android:contentDescription="@string/hint_passage" />
+
+            <!-- A quiet, always-correct count. Tells the user how long the
+                 passage is, which is what they need to judge the read. -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:gravity="center_vertical"
+                android:layout_marginTop="@dimen/space_sm">
+
+                <TextView
+                    android:id="@+id/tvWordCount"
+                    style="@style/Text.Sonata.Label"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:textColor="@color/text_dim" />
+
+                <TextView
+                    android:id="@+id/btnPaste"
+                    style="@style/Text.Sonata.Label"
+                    android:layout_width="wrap_content"
+                    android:layout_height="@dimen/touch_min"
+                    android:gravity="center_vertical"
+                    android:paddingStart="@dimen/space_md"
+                    android:paddingEnd="@dimen/space_xs"
+                    android:text="@string/action_paste"
+                    android:textColor="@color/accent_teal"
+                    android:background="?attr/selectableItemBackgroundBorderless" />
+
+                <TextView
+                    android:id="@+id/btnClear"
+                    style="@style/Text.Sonata.Label"
+                    android:layout_width="wrap_content"
+                    android:layout_height="@dimen/touch_min"
+                    android:gravity="center_vertical"
+                    android:paddingStart="@dimen/space_md"
+                    android:paddingEnd="@dimen/space_xs"
+                    android:text="@string/action_clear"
+                    android:textColor="@color/text_dim"
+                    android:background="?attr/selectableItemBackgroundBorderless" />
+            </LinearLayout>
+
+            <!-- ── The primary control ───────────────────────────────────── -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:gravity="center_vertical"
+                android:layout_marginTop="@dimen/space_md">
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/btnPlay"
+                    style="@style/Button.Sonata.Primary"
+                    android:layout_width="0dp"
+                    android:layout_height="@dimen/touch_primary"
+                    android:layout_weight="1"
+                    android:text="@string/action_read"
+                    app:icon="@drawable/ic_play"
+                    app:iconGravity="textStart"
+                    app:iconTint="@color/bg_dark"
+                    app:iconPadding="@dimen/space_sm" />
+
+                <!-- Carry on: shown only when there is a stored position in this
+                     exact passage, so it is never a dead control. Reading on from
+                     where the user stopped is the whole point of keeping the
+                     passage at all; restarting from the top made returning to a
+                     long passage useless. -->
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/btnResume"
+                    style="@style/Button.Sonata.Secondary"
+                    android:layout_width="wrap_content"
+                    android:layout_height="@dimen/touch_primary"
+                    android:layout_marginStart="@dimen/space_sm"
+                    android:minWidth="0dp"
+                    android:text="@string/action_carry_on"
+                    android:visibility="gone" />
+
+                <!-- Stop: secondary, but never hidden, and never a dead control
+                     (disabled until there is something to stop). -->
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/btnStop"
+                    style="@style/Button.Sonata.Secondary"
+                    android:layout_width="wrap_content"
+                    android:layout_height="@dimen/touch_primary"
+                    android:layout_marginStart="@dimen/space_sm"
+                    android:minWidth="@dimen/touch_primary"
+                    android:paddingStart="0dp"
+                    android:paddingEnd="0dp"
+                    android:enabled="false"
+                    app:icon="@drawable/ic_stop"
+                    app:iconGravity="textStart"
+                    app:iconPadding="0dp"
+                    android:contentDescription="@string/action_stop" />
+            </LinearLayout>
+
+            <!-- ── Voice and speed, on one quiet row ─────────────────────── -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:gravity="center_vertical"
+                android:layout_marginTop="@dimen/space_sm">
+
+                <Spinner
+                    android:id="@+id/spinnerVoice"
+                    android:layout_width="0dp"
+                    android:layout_height="@dimen/touch_min"
+                    android:layout_weight="1"
+                    android:background="@drawable/bg_input"
+                    android:contentDescription="@string/label_voice" />
+
+                <!-- Choosing a voice by reading a name is guesswork, and four voices
+                     sound different. Hearing one is the only honest way to pick. -->
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/btnPreviewVoice"
+                    style="@style/Button.Sonata.Chip"
+                    android:layout_width="wrap_content"
+                    android:layout_height="@dimen/touch_min"
+                    android:layout_marginStart="@dimen/space_sm"
+                    android:text="@string/action_hear_voice"
+                    android:contentDescription="@string/action_hear_voice_desc" />
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/btnSpeed"
+                    style="@style/Button.Sonata.Chip"
+                    android:layout_width="wrap_content"
+                    android:layout_height="@dimen/touch_min"
+                    android:layout_marginStart="@dimen/space_sm"
+                    android:text="@string/speed_default"
+                    android:contentDescription="@string/label_speed" />
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/btnMore"
+                    style="@style/Button.Sonata.Secondary"
+                    android:layout_width="wrap_content"
+                    android:layout_height="@dimen/touch_min"
+                    android:layout_marginStart="@dimen/space_sm"
+                    android:minWidth="@dimen/touch_min"
+                    android:paddingStart="0dp"
+                    android:paddingEnd="0dp"
+                    app:icon="@drawable/ic_more"
+                    app:iconGravity="textStart"
+                    app:iconPadding="0dp"
+                    android:contentDescription="@string/action_more" />
+            </LinearLayout>
+
+            <!-- ── More: everything optional, revealed on request ────────── -->
+            <LinearLayout
+                android:id="@+id/panelMore"
+                style="@style/Surface.Sonata"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:layout_marginTop="@dimen/space_md"
+                android:visibility="gone">
+
+                <TextView
+                    style="@style/Text.Sonata.Section"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="@string/section_playback" />
+
+                <TextView
+                    style="@style/Text.Sonata.Label"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="@dimen/space_sm"
+                    android:text="@string/label_speed" />
+
+                <SeekBar
+                    android:id="@+id/seekSpeed"
+                    android:layout_width="match_parent"
+                    android:layout_height="@dimen/touch_min" />
+
+                <TextView
+                    android:id="@+id/tvSpeedValue"
+                    style="@style/Text.Sonata.Label"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:textColor="@color/text_primary" />
+
+                <TextView
+                    style="@style/Text.Sonata.Label"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="@dimen/space_lg"
+                    android:text="@string/label_pitch" />
+
+                <SeekBar
+                    android:id="@+id/seekPitch"
+                    android:layout_width="match_parent"
+                    android:layout_height="@dimen/touch_min" />
+
+                <TextView
+                    android:id="@+id/tvPitchValue"
+                    style="@style/Text.Sonata.Label"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:textColor="@color/text_primary" />
+
+                <TextView
+                    style="@style/Text.Sonata.Section"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="@dimen/space_xl"
+                    android:text="@string/section_storage" />
+
+                <TextView
+                    android:id="@+id/tvCache"
+                    style="@style/Text.Sonata.Label"
+                    android:layout_width="match_parent"
+                    android:layout_height="@dimen/touch_min"
+                    android:gravity="center_vertical"
+                    android:layout_marginTop="@dimen/space_xs"
+                    android:background="?attr/selectableItemBackground" />
+
+                <TextView
+                    android:id="@+id/tvBackend"
+                    style="@style/Text.Sonata.Label"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="@dimen/space_xs"
+                    android:textColor="@color/text_dim"
+                    android:textSize="@dimen/text_meta" />
+            </LinearLayout>
+
+            <!-- ── Messages ──────────────────────────────────────────────── -->
+            <TextView
+                android:id="@+id/tvNotice"
+                style="@style/Text.Sonata.Label"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="@dimen/space_md"
+                android:padding="@dimen/space_md"
+                android:background="@drawable/bg_surface"
+                android:textColor="@color/accent_warm"
+                android:visibility="gone" />
+
+            <!-- The one piece of guidance a first-time user needs, and nothing
+                 more: how text gets into this app from another one. -->
+            <TextView
+                android:id="@+id/tvHint"
+                style="@style/Text.Sonata.Label"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="@dimen/space_lg"
                 android:textColor="@color/text_dim"
-                android:textSize="11sp" />
+                android:textSize="@dimen/text_meta"
+                android:lineSpacingMultiplier="1.3"
+                android:text="@string/hint_handoff" />
 
-            <SeekBar
-                android:id="@+id/seekSpeed"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="2dp" />
+        </LinearLayout>
+    </ScrollView>
+
+    <!-- ── The mini-player ────────────────────────────────────────────────
+         Appears when the read continues after the user scrolls the passage away
+         or leaves and returns. It is the in-app half of the floating player: a
+         persistent, reachable playback surface, so the user never has to hunt
+         for controls or scroll back to them. -->
+    <LinearLayout
+        android:id="@+id/miniPlayer"
+        style="@style/Surface.Sonata"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_gravity="bottom"
+        android:layout_marginStart="@dimen/space_md"
+        android:layout_marginEnd="@dimen/space_md"
+        android:layout_marginBottom="@dimen/space_md"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:elevation="8dp"
+        android:visibility="gone">
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/miniPlayPause"
+            style="@style/Button.Sonata.Primary"
+            android:layout_width="@dimen/touch_min"
+            android:layout_height="@dimen/touch_min"
+            android:minWidth="@dimen/touch_min"
+            android:paddingStart="0dp"
+            android:paddingEnd="0dp"
+            app:icon="@drawable/ic_pause"
+            app:iconGravity="textStart"
+            app:iconPadding="0dp"
+            android:contentDescription="@string/action_pause" />
+
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:orientation="vertical"
+            android:layout_marginStart="@dimen/space_md">
 
             <TextView
-                android:id="@+id/tvSpeedValue"
+                android:id="@+id/miniTitle"
+                style="@style/Text.Sonata.Label"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:textColor="@color/text_secondary"
-                android:textSize="12sp" />
+                android:maxLines="1"
+                android:ellipsize="end"
+                android:textColor="@color/text_primary" />
 
-            <TextView
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="12dp"
-                android:text="PITCH — device voice only"
-                android:textColor="@color/text_dim"
-                android:textSize="11sp" />
-
-            <SeekBar
-                android:id="@+id/seekPitch"
+            <ProgressBar
+                android:id="@+id/miniProgress"
+                style="@style/Progress.Sonata"
                 android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="2dp" />
-
-            <TextView
-                android:id="@+id/tvPitchValue"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:textColor="@color/text_secondary"
-                android:textSize="12sp" />
-
-            <TextView
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="12dp"
-                android:textColor="@color/text_dim"
-                android:textSize="11sp"
-                android:id="@+id/tvCache" />
+                android:layout_height="3dp"
+                android:layout_marginTop="@dimen/space_xs" />
         </LinearLayout>
 
-        <TextView
-            android:id="@+id/tvError"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="10dp"
-            android:textColor="@color/accent_warm"
-            android:textSize="13sp"
-            android:visibility="gone" />
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/miniFloat"
+            style="@style/Button.Sonata.Secondary"
+            android:layout_width="@dimen/touch_min"
+            android:layout_height="@dimen/touch_min"
+            android:layout_marginStart="@dimen/space_sm"
+            android:minWidth="@dimen/touch_min"
+            android:paddingStart="0dp"
+            android:paddingEnd="0dp"
+            app:icon="@drawable/ic_float"
+            app:iconGravity="textStart"
+            app:iconPadding="0dp"
+            android:contentDescription="@string/action_float" />
 
-        <TextView
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="14dp"
-            android:text="Select text in any app → ⋮ → Sonata"
-            android:textColor="@color/text_dim"
-            android:textSize="11sp" />
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/miniStop"
+            style="@style/Button.Sonata.Secondary"
+            android:layout_width="@dimen/touch_min"
+            android:layout_height="@dimen/touch_min"
+            android:layout_marginStart="@dimen/space_sm"
+            android:minWidth="@dimen/touch_min"
+            android:paddingStart="0dp"
+            android:paddingEnd="0dp"
+            app:icon="@drawable/ic_close"
+            app:iconGravity="textStart"
+            app:iconPadding="0dp"
+            android:contentDescription="@string/action_stop" />
     </LinearLayout>
-</ScrollView>
+
+</androidx.coordinatorlayout.widget.CoordinatorLayout>

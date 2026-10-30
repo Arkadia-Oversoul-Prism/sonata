@@ -7,8 +7,27 @@ import android.content.Intent
  * the mapping is unit-testable.
  */
 sealed class SpeechCommand {
-    /** Speak [text]; an empty request is refused rather than dispatched. */
-    data class Speak(val text: String, val label: String) : SpeechCommand()
+    /**
+     * Speak [text]; an empty request is refused rather than dispatched.
+     *
+     * [fromChar] is where to start inside [text]. It exists so a passage can be
+     * resumed where the user left it instead of restarting from the top.
+     */
+    data class Speak(
+        val text: String,
+        val label: String,
+        val fromChar: Int = 0,
+    ) : SpeechCommand()
+
+    /**
+     * Speak a short sample of [voiceId] and stop.
+     *
+     * Deliberately not a [Speak]: it must not start a read, must not be treated as
+     * the passage, and must not be resumed or carried on. The user is choosing a
+     * voice, not listening to their text, so conflating the two would overwrite the
+     * reading position with a sample.
+     */
+    data class Preview(val voiceId: String, val text: String) : SpeechCommand()
 
     object Pause : SpeechCommand()
     object Resume : SpeechCommand()
@@ -29,11 +48,26 @@ sealed class SpeechCommand {
          * `START_NOT_STICKY` early, leaving the foreground notification already
          * promoted and the service alive with no work — a stale-service state.
          */
-        fun resolve(action: String?, text: String?, label: String?): SpeechCommand =
+        fun resolve(
+            action: String?,
+            text: String?,
+            label: String?,
+            fromChar: Int = 0,
+            voiceId: String? = null,
+        ): SpeechCommand =
             when (action) {
                 SpeechService.ACTION_SPEAK ->
                     if (text.isNullOrBlank()) None
-                    else Speak(text = text, label = label ?: DEFAULT_LABEL)
+                    else Speak(
+                        text = text,
+                        label = label ?: DEFAULT_LABEL,
+                        // A negative offset is meaningless; treat it as the start.
+                        fromChar = fromChar.coerceAtLeast(0),
+                    )
+
+                SpeechService.ACTION_PREVIEW ->
+                    if (text.isNullOrBlank() || voiceId.isNullOrBlank()) None
+                    else Preview(voiceId = voiceId, text = text)
 
                 SpeechService.ACTION_PAUSE -> Pause
                 SpeechService.ACTION_RESUME -> Resume
@@ -46,6 +80,8 @@ sealed class SpeechCommand {
             action = intent?.action,
             text = intent?.getStringExtra(SpeechService.EXTRA_TEXT),
             label = intent?.getStringExtra(SpeechService.EXTRA_LABEL),
+            fromChar = intent?.getIntExtra(SpeechService.EXTRA_FROM_CHAR, 0) ?: 0,
+            voiceId = intent?.getStringExtra(SpeechService.EXTRA_VOICE_ID),
         )
     }
 }

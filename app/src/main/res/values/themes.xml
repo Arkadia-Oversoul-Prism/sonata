@@ -1,14 +1,29 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <style name="Theme.Sonata" parent="Theme.MaterialComponents.DayNight.DarkActionBar">
+    <!-- No action bar: the screen carries its own header, and an action bar on a
+         reading surface is chrome the user did not ask for. -->
+    <style name="Theme.Sonata" parent="Theme.MaterialComponents.DayNight.NoActionBar">
         <item name="colorPrimary">@color/accent_teal</item>
         <item name="colorPrimaryVariant">@color/bg_card</item>
         <item name="colorOnPrimary">@color/bg_dark</item>
-        <item name="colorSecondary">@color/accent_warm</item>
+        <item name="colorSecondary">@color/accent_teal</item>
         <item name="colorOnSecondary">@color/bg_dark</item>
+        <item name="colorSurface">@color/bg_card</item>
+        <item name="colorOnSurface">@color/text_primary</item>
         <item name="android:windowBackground">@color/bg_dark</item>
         <item name="android:statusBarColor">@color/bg_dark</item>
         <item name="android:navigationBarColor">@color/bg_dark</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <!-- Dark-only for now: the palette is designed for it, and a half-tuned
+             light theme would look worse than none. -->
+        <item name="isLightTheme">false</item>
+        <item name="android:textColorPrimary">@color/text_primary</item>
+        <item name="android:textColorSecondary">@color/text_secondary</item>
+        <item name="android:textColorHint">@color/text_dim</item>
+        <item name="android:colorControlNormal">@color/text_secondary</item>
+        <item name="android:colorControlActivated">@color/accent_teal</item>
+        <item name="colorControlActivated">@color/accent_teal</item>
+        <item name="android:colorAccent">@color/accent_teal</item>
     </style>
 
     <!-- Transparent theme for ProcessTextActivity (no UI shown) -->
@@ -19,5 +34,12 @@
         <item name="android:windowNoTitle">true</item>
         <item name="android:windowIsFloating">true</item>
         <item name="android:backgroundDimEnabled">false</item>
+    </style>
+
+    <!-- Splash-free launch: the window background is the app background, so there
+         is no flash of a different colour before the first frame. -->
+    <style name="Theme.Sonata.Launch" parent="Theme.Sonata">
+        <item name="android:windowBackground">@color/bg_dark</item>
+        <item name="android:windowDisablePreview">false</item>
     </style>
 </resources>

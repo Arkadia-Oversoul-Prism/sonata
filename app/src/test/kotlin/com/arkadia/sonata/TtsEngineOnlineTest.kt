@@ -51,6 +51,7 @@ class TtsEngineOnlineTest {
         offlineReady: Boolean = true,
         backendUrl: String = "https://example.test",
         preferOnline: Boolean = true,
+        prefetchDepth: Int = 0,
     ): Harness {
         val transport = FakeTransport(result = result, delayMs = delayMs)
         val player = FakeAudioPlayer()
@@ -69,9 +70,101 @@ class TtsEngineOnlineTest {
             // JVM implementation, and the engine's main-thread hop must be
             // advanceable by advanceUntilIdle().
             mainDispatcher = StandardTestDispatcher(scope.testScheduler),
+            // Deterministic fetch order: the engine fetches one piece at a time as
+            // the previous one finishes, so a test can assert on the sequence.
+            prefetchDepth = prefetchDepth,
         )
         engine.listener = listener
         return Harness(engine, transport, player, offline, listener, settings, cacheDir)
+    }
+
+    /**
+     * Drive a segmented read to its end.
+     *
+     * `advanceUntilIdle()` alone cannot finish a multi-piece read: it is the real
+     * `MediaPlayer`, not the engine, that reports a piece ended. This plays each
+     * piece and completes it in turn, exactly as the platform player would, so the
+     * assertions are about the engine's sequencing rather than about the fake's
+     * bookkeeping.
+     */
+    private fun TestScope.playThrough(h: Harness, maxPieces: Int = 500) {
+        repeat(maxPieces) {
+            advanceUntilIdle()
+            if (h.player.playing) h.player.complete() else return
+        }
+    }
+
+    // ── Resuming where the user stopped ───────────────────────────────────────
+
+    /**
+     * A long passage must be resumable, and the resume must not skip or repeat
+     * speech.
+     *
+     * The engine is the right place for the offset because it knows where each piece
+     * begins. These tests pin the two ways that could go wrong: starting at the
+     * wrong piece, and losing text at the seam.
+     */
+    @Test
+    fun `speakFrom starts at the piece containing the offset`() = runTest {
+        val h = harness(this)
+        // Long enough to be split into several pieces.
+        val text = (1..400).joinToString(" ") { "sentence$it" }
+        val offset = text.length / 2
+
+        h.engine.speakFrom(text, offset)
+        advanceUntilIdle()
+
+        val firstRequested = h.transport.requests.first().first
+        assertTrue(
+            "the read must not restart from the beginning (asked for: ${firstRequested.take(40)})",
+            !firstRequested.startsWith("sentence1 "),
+        )
+        // The first piece is the one containing the offset, so it is a slice of the
+        // passage from that piece's start — never a re-synthesis of the opening.
+        assertTrue(
+            "the first piece must come from the passage itself",
+            text.contains(firstRequested),
+        )
+    }
+
+    @Test
+    fun `speakFrom covers the whole remainder of the passage`() = runTest {
+        val h = harness(this, prefetchDepth = 1)
+        val text = (1..400).joinToString(" ") { "sentence$it" }
+        val offset = text.length / 3
+
+        h.engine.speakFrom(text, offset)
+        playThrough(h)
+
+        // Concatenating everything actually sent must be the tail of the passage:
+        // nothing before the resume point, nothing dropped after it, and nothing
+        // duplicated at a seam.
+        val spoken = h.transport.requests.joinToString("") { it.first }
+        assertTrue("something must be read", spoken.isNotEmpty())
+        assertTrue("the read must skip the part already heard", spoken.length < text.length)
+        assertTrue(
+            "the remainder must be read in order, with nothing lost at a seam",
+            text.endsWith(spoken),
+        )
+    }
+
+    @Test
+    fun `speakFrom past the end does not crash and reads nothing`() = runTest {
+        val h = harness(this)
+        h.engine.speakFrom("A short passage.", fromChar = 9999)
+        advanceUntilIdle()
+
+        val spoken = h.transport.requests.joinToString("") { it.first }
+        assertTrue("nothing before the clamp point may be spoken", spoken.isEmpty())
+    }
+
+    @Test
+    fun `speakFrom with a negative offset reads from the start`() = runTest {
+        val h = harness(this)
+        h.engine.speakFrom("Hello there", fromChar = -50)
+        advanceUntilIdle()
+
+        assertEquals("Hello there", h.transport.requests.first().first)
     }
 
     // ── Success path ──────────────────────────────────────────────────────────
@@ -163,19 +256,60 @@ class TtsEngineOnlineTest {
     }
 
     @Test
-    fun `oversized input is truncated before sending and the truncation is reported`() = runTest {
-        val h = harness(this)
-        val long = "x".repeat(MAX_TTS_CHARS + 500)
+    fun `input longer than one request is split, not truncated, and every piece is fetched`() = runTest {
+        // The defect the founder reported as a length limit: the old path cut the
+        // text at the backend's 5000-character request ceiling and spoke only that.
+        // A longer passage must now be read in full, as several requests whose
+        // concatenation is the original text.
+        val h = harness(this, prefetchDepth = 0)
+        val long = buildString { repeat(2000) { append("word$it ") } } // ~14k chars
+        assertTrue("fixture must exceed one request", long.length > MAX_TTS_CHARS)
+
+        h.engine.speak(long)
+        playThrough(h)
+
+        assertTrue("a long passage needs more than one request", h.transport.requests.size > 1)
+        // No request may exceed the backend's own ceiling, or the tail of that
+        // request would be silently dropped server-side.
+        assertTrue(
+            "no piece may exceed the backend ceiling: ${h.transport.requests.map { it.first.length }}",
+            h.transport.requests.all { it.first.length <= MAX_TTS_CHARS },
+        )
+        // Nothing lost and nothing reordered: the requests, in order, are the text.
+        // Compared against the trimmed input, which is what validation hands on.
+        assertEquals(long.trim(), h.transport.requests.joinToString("") { it.first })
+        // No truncation was reported, because none happened.
+        assertTrue(
+            "a passage that fits the input ceiling must not be reported as truncated",
+            h.listener.failures.none { it.msg.contains("truncated") },
+        )
+    }
+
+    @Test
+    fun `the first request is short so speech can begin early`() = runTest {
+        // Measured against the live gateway: a 340-character request returns in
+        // ~1.8 s, a 5000-character request in ~29 s. Asking for the whole passage
+        // first is what made speech feel like it never started.
+        val h = harness(this, prefetchDepth = 0)
+        val long = buildString { repeat(2000) { append("word$it ") } }
         h.engine.speak(long)
         advanceUntilIdle()
 
-        assertEquals(1, h.transport.requests.size)
-        assertEquals(MAX_TTS_CHARS, h.transport.requests[0].first.length)
+        val first = h.transport.requests.first().first.length
+        assertTrue("the opening request must be short, was $first", first <= SpeechChunker.STREAM_FIRST_LIMIT)
+    }
 
-        val truncationNotice = h.listener.failures.firstOrNull {
-            it.msg.contains("truncated")
-        }
-        assertTrue("truncation must be reported to the user", truncationNotice != null)
+    @Test
+    fun `the whole passage is played as consecutive pieces in order`() = runTest {
+        val h = harness(this, prefetchDepth = 0)
+        val long = buildString { repeat(2000) { append("word$it ") } }
+        h.engine.speak(long)
+        playThrough(h)
+
+        // Each piece reaching the player in turn, and the last one completing the
+        // read. Fewer plays than pieces would mean a piece was skipped.
+        assertEquals(h.transport.requests.size, h.player.playCalls)
+        assertTrue("the read must finish", h.listener.completed)
     }
 
     // ── Failure and fallback ──────────────────────────────────────────────────
@@ -498,6 +632,180 @@ class TtsEngineOnlineTest {
 
         assertEquals(1, h.listener.failures.size)
         assertEquals("Nothing to resume", h.listener.failures[0].msg)
+    }
+
+    // ── Progressive read: progress, buffering and mid-passage fallback ─────────
+
+    @Test
+    fun `progress reports the whole passage and the piece being played`() = runTest {
+        val h = harness(this, prefetchDepth = 0)
+        val long = buildString { repeat(2000) { append("word$it ") } }
+        h.engine.speak(long)
+        advanceUntilIdle()
+
+        // The denominator is the passage the user offered, not the piece being
+        // spoken: a progress read against a 900-character piece would always look
+        // almost finished.
+        assertEquals(long.trim().length, h.engine.totalChars)
+        assertTrue("a long passage must be split", h.engine.segmentCount > 1)
+        assertEquals("the first piece is piece 1", 1, h.engine.segmentIndex)
+        assertEquals("nothing has been spoken past the first piece", 0, h.engine.spokenChars)
+    }
+
+    @Test
+    fun `a paused read does not advance to the next piece`() = runTest {
+        val h = harness(this, prefetchDepth = 0)
+        val long = buildString { repeat(2000) { append("word$it ") } }
+        h.engine.speak(long)
+        advanceUntilIdle()
+
+        h.engine.pause()
+        val playsAtPause = h.player.playCalls
+
+        // The first piece ends while paused; the engine must not roll on to the
+        // second, or pausing would be indistinguishable from a no-op.
+        h.player.complete()
+        advanceUntilIdle()
+
+        assertEquals("a paused read must not start another piece", playsAtPause, h.player.playCalls)
+        assertTrue(h.engine.isPaused)
+    }
+
+    @Test
+    fun `resuming a read paused between pieces continues it`() = runTest {
+        val h = harness(this, prefetchDepth = 0)
+        val long = buildString { repeat(2000) { append("word$it ") } }
+        h.engine.speak(long)
+        advanceUntilIdle()
+
+        // Reach the gap between pieces: the first has ended and the next is not
+        // staged yet.
+        h.engine.pause()
+        h.player.complete()
+        advanceUntilIdle()
+        assertTrue("expected the read to be paused", h.engine.isPaused)
+
+        h.engine.resume()
+        advanceUntilIdle()
+
+        assertFalse(h.engine.isPaused)
+        assertTrue("resuming must actually play the next piece", h.player.playCalls >= 2)
+    }
+
+    @Test
+    fun `a failure on a later piece falls back with the unread remainder, not the whole passage`() = runTest {
+        // The first piece succeeds; the second fails. The fallback must speak what
+        // has not been read — re-reading the passage from the top would repeat
+        // audio the user already heard, and speaking nothing would lose the rest.
+        val long = buildString { repeat(2000) { append("word$it ") } }
+        val transport = FakeTransport(
+            sequence = listOf(
+                SynthesisResult.Success(ByteArray(64) { 1 }, "audio/mpeg", "edge_tts"),
+                SynthesisResult.Failure("Backend returned HTTP 502"),
+            ),
+        )
+        val player = FakeAudioPlayer()
+        val offline = FakeOfflineVoice()
+        val listener = RecordingListener()
+        val engine = TtsEngine(
+            settings = FakeSettings(backendUrl = "https://example.test", preferOnline = true),
+            cacheDir = temp.newFolder("fallback-cache"),
+            transport = transport,
+            player = player,
+            offline = offline,
+            scope = this,
+            mainDispatcher = StandardTestDispatcher(testScheduler),
+            prefetchDepth = 0,
+        )
+        engine.listener = listener
+
+        engine.speak(long)
+        advanceUntilIdle()
+        val firstPiece = transport.requests.first().first
+        assertTrue("the first piece must have been spoken", player.playCalls == 1)
+
+        // Let the first piece finish so the read reaches the failing second piece.
+        player.complete()
+        advanceUntilIdle()
+
+        assertEquals(1, offline.utterances.size)
+        val spoken = offline.utterances[0].text
+        assertTrue("the fallback must not be empty", spoken.isNotBlank())
+        assertTrue(
+            "the fallback must not re-read the passage from the top",
+            !spoken.startsWith(firstPiece),
+        )
+        // And it must be the remainder, so nothing is lost.
+        assertTrue("the remainder must be spoken", long.trim().endsWith(spoken))
+    }
+
+    @Test
+    fun `the start is reported once for a whole segmented read`() = runTest {
+        // A read is one utterance to the user. Reporting a start per piece would
+        // make the UI flicker and the notification re-post on every piece.
+        val h = harness(this, prefetchDepth = 0)
+        val long = buildString { repeat(2000) { append("word$it ") } }
+        h.engine.speak(long)
+        playThrough(h)
+
+        assertEquals(1, h.listener.starts.size)
+    }
+
+    // ── Prefetch must not cut off what is playing ────────────────────────────
+
+    /**
+     * The production prefetch depth.
+     *
+     * Every other test in this file runs at depth 0, which makes the read strictly
+     * sequential and therefore *cannot* observe the failure this pins: at depth 1 the
+     * next piece is synthesised while the current one plays, and an engine that
+     * advances whenever a later piece becomes available cuts the current piece off
+     * mid-sentence and hops forward.
+     */
+    @Test
+    fun `a prefetched piece does not interrupt the piece playing`() = runTest {
+        val h = harness(this, prefetchDepth = 1)
+        val long = buildString { repeat(2000) { append("word$it ") } }
+        h.engine.speak(long)
+        advanceUntilIdle()
+
+        // The first piece is playing, and the second was fetched during it.
+        assertEquals("only the first piece may have started", 1, h.player.playCalls)
+        assertTrue("the first piece must be playing", h.engine.isPlaying)
+        assertTrue("a second piece must have been prefetched", h.transport.requests.size >= 2)
+
+        // Let the first piece finish. Only now may the second start.
+        h.player.complete()
+        advanceUntilIdle()
+        assertEquals("the second piece starts when the first ends", 2, h.player.playCalls)
+    }
+
+    @Test
+    fun `every piece is heard in order at the production prefetch depth`() = runTest {
+        val h = harness(this, prefetchDepth = 1)
+        val long = buildString { repeat(2000) { append("word$it ") } }
+        h.engine.speak(long)
+        advanceUntilIdle()
+
+        // Drive the read to completion by ending each piece in turn, and assert the
+        // pieces were requested and played in the passage's order. A read that hops
+        // forward plays fewer pieces than it requests.
+        val played = mutableListOf<String>()
+        var guard = 0
+        while (h.engine.isPlaying && guard++ < 40) {
+            val before = h.player.playCalls
+            h.player.complete()
+            advanceUntilIdle()
+            if (h.player.playCalls > before) played += "piece${h.player.playCalls}"
+        }
+
+        assertEquals(
+            "a prefetched read must play every piece it fetched, in order",
+            h.transport.requests.size,
+            h.player.playCalls,
+        )
+        // And the requests, in order, are the passage.
+        assertEquals(long.trim(), h.transport.requests.joinToString("") { it.first })
     }
 
     // ── Engine selection ──────────────────────────────────────────────────────

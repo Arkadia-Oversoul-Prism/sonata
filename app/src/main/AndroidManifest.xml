@@ -4,6 +4,11 @@
     <!-- ── Permissions ──────────────────────────────────────────────── -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+    <!-- The floating player is a window that must outlive the app being in the
+         background, so it is a foreground service. "special use" is the correct
+         declared type for an always-visible control surface that is neither media
+         playback (SpeechService owns that) nor location/camera/mic. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
     <!-- Requested at runtime on API 33+; without it the playback notification —
          and therefore every transport control — is invisible. -->
@@ -31,7 +36,11 @@
             </intent-filter>
         </activity>
 
-        <!-- ── PROCESS_TEXT — appears in system text-selection menu ── -->
+        <!-- ── PROCESS_TEXT and share targets ─────────────────────────
+             Two routes in, both handled by ProcessTextActivity:
+             PROCESS_TEXT is the text-selection menu; SEND is the system share
+             sheet. Only the first was declared, so "share to Sonata" silently
+             never appeared even though the code accepted EXTRA_TEXT. -->
         <activity
             android:name=".ProcessTextActivity"
             android:exported="true"
@@ -39,6 +48,11 @@
             android:excludeFromRecents="true">
             <intent-filter>
                 <action android:name="android.intent.action.PROCESS_TEXT" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="text/plain" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <data android:mimeType="text/plain" />
             </intent-filter>
@@ -53,7 +67,12 @@
         <!-- ── Floating overlay service ──────────────────────────────── -->
         <service
             android:name=".FloatingOverlayService"
-            android:exported="false" />
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Floating playback controls shown over other apps" />
+        </service>
 
     </application>
 </manifest>

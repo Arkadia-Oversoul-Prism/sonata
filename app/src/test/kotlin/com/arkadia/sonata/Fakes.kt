@@ -121,15 +121,23 @@ class FakeAudioPlayer : AudioPlayer {
         paused = false
     }
 
-    /** Simulate the player reaching the end of the audio. */
+    /**
+     * Simulate the player reaching the end of the audio.
+     *
+     * Clears [paused] because the real player does: `AndroidAudioPlayer`'s
+     * completion listener sets `paused = false`. Leaving it set let a test resume a
+     * stream that had already ended, which `MediaPlayer` would have refused.
+     */
     fun complete() {
         playing = false
+        paused = false
         onCompletion?.invoke()
     }
 
     /** Simulate a playback error after a successful start. */
     fun fail(msg: String) {
         playing = false
+        paused = false
         onError?.invoke(msg)
     }
 }

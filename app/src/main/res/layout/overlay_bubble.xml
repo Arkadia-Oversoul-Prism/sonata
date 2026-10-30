@@ -1,15 +1,26 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- The collapsed state: one small draggable circle. Tapping it expands the player. -->
-<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+<!--
+  The collapsed floating player: one small draggable circle.
+
+  A tap expands the player. The tap is recognised in FloatingOverlayService's touch
+  handler, not by an OnClickListener here, because the drag listener consumes
+  ACTION_DOWN and that suppresses the framework's click detection — which is why a
+  collapsed player could never be reopened.
+-->
+<FrameLayout xmlns:app="http://schemas.android.com/apk/res-auto"
+    xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="wrap_content"
-    android:layout_height="wrap_content">
+    android:layout_height="wrap_content"
+    android:padding="@dimen/space_xs">
 
     <ImageView
         android:id="@+id/ivBubble"
-        android:layout_width="52dp"
-        android:layout_height="52dp"
-        android:padding="14dp"
-        android:src="@drawable/ic_sonata"
+        android:layout_width="56dp"
+        android:layout_height="56dp"
+        android:padding="16dp"
+        android:src="@drawable/ic_wave"
         android:background="@drawable/bg_play_btn"
-        android:contentDescription="Sonata player" />
+        app:tint="@color/bg_dark"
+        android:elevation="8dp"
+        android:contentDescription="@string/action_expand" />
 </FrameLayout>

@@ -1,6 +1,9 @@
 package com.arkadia.sonata
 
 import android.util.Log
+import java.io.File
+import java.util.UUID
+import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -10,30 +13,42 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import java.io.File
-import java.util.UUID
 
 private const val TAG = "SonataTts"
 
 /**
- * Two-tier TTS engine.
+ * Two-tier TTS engine, reading a passage progressively.
  *
  *  Tier 1 (online, neural) — `POST {backendUrl}/api/tts`; the returned audio is
  *    written to a cache file and played by [AudioPlayer].
  *  Tier 2 (offline) — the platform `TextToSpeech` engine via [OfflineVoice].
  *
+ * **Why the passage is split.** Synthesis latency scales with the length of the
+ * request. Measured against the live gateway, a 340-character request returned in
+ * ~1.8 s while a single 5000-character request took ~29 s. The previous
+ * implementation asked for the whole passage as one request and waited for all of
+ * it before a single sample played, which is why speech did not begin immediately
+ * and why a long passage appeared to have a length limit. This engine splits the
+ * passage ([SpeechChunker.splitForStreaming]), fetches a short first piece so
+ * speech starts in about a second, and fetches the following pieces *while the
+ * current one is playing*, so the read continues without a gap.
+ *
  * Guarantees this class is responsible for:
  *
- *  - **Single owner.** Every [speak] supersedes any in-flight request: the old
- *    request is cancelled and its file deleted, and a superseded request can
+ *  - **Single owner.** Every [speak] supersedes any in-flight work: outstanding
+ *    requests are cancelled, their files deleted, and a superseded request can
  *    never start playback or clobber the new one.
- *  - **Bounded input.** Text is validated and truncated to the backend's own
- *    ceiling before it is sent ([TextLimits]).
+ *  - **Nothing lost, nothing repeated.** The pieces partition the input exactly
+ *    ([SpeechChunker] pins `joinToString("") == text`), and they are played in
+ *    order, so the whole passage is read once.
+ *  - **Bounded input.** Text is validated and bounded before anything is sent
+ *    ([TextLimits]); a piece is never longer than the backend's own ceiling.
  *  - **Cleanup on every exit path.** Completion, error, supersession, [stop] and
- *    [shutdown] all delete the temp file.
- *  - **Honest fallback.** Any online failure — transport error, non-success HTTP,
- *    non-audio content type, empty body, undecodable audio — falls back to offline
- *    speech and reports why.
+ *    [shutdown] delete every staged file.
+ *  - **Honest fallback.** Any online failure falls back to offline speech from the
+ *    piece that failed, so the rest of the passage is still heard, and the reason
+ *    is reported. When the offline engine is also unavailable, the failure is
+ *    reported without a fallback rather than claiming one that cannot happen.
  *  - **Honest resume.** Online pause/resume continues the same decoded stream.
  *    Offline pause stops the utterance and records the character reached; resume
  *    re-speaks the remainder. That is a content resume with a re-synthesis seam,
@@ -62,6 +77,15 @@ class TtsEngine(
      * rather than emulation speed; production uses [DEFAULT_OFFLINE_READY_TIMEOUT_MS].
      */
     private val offlineReadyTimeoutMs: Long = DEFAULT_OFFLINE_READY_TIMEOUT_MS,
+    /**
+     * How many pieces ahead of the one needed next to fetch.
+     *
+     * Zero is a valid value and means a strictly sequential read: each piece is
+     * requested only once the previous one has finished playing. One is enough to
+     * hide synthesis latency without holding a whole long passage in the cache,
+     * because the next piece is synthesised during the current piece's playback.
+     */
+    private val prefetchDepth: Int = 1,
 ) {
 
     /**
@@ -100,7 +124,7 @@ class TtsEngine(
 
     val playbackState: PlaybackState get() = state
 
-    /** The in-flight request, if any; used to supersede it. */
+    /** The in-flight offline readiness wait, if any; used to supersede it. */
     private var inFlight: Job? = null
 
     /**
@@ -109,12 +133,71 @@ class TtsEngine(
      */
     private var generation: Int = 0
 
-    /** The temp file owned by the current request, if any. */
+    /** The file owned by the piece currently playing, if any. */
     private var currentFile: File? = null
 
     /**
-     * Set while [speakOffline] is dispatching, so the progress callback is only
-     * accepted for the utterance actually being started.
+     * True while a voice sample is playing.
+     *
+     * The service uses this to know that completion means "the sample ended", not
+     * "the read ended", so a preview never reports a finished read.
+     */
+    var isPreviewing: Boolean = false
+        private set
+
+    // ── The segmented read ────────────────────────────────────────────────────
+
+    /** One request-sized piece of the passage. [startChar] is where it begins. */
+    private data class Segment(val text: String, val startChar: Int)
+
+    /** The passage as offered, so progress can be reported against the whole. */
+    private var fullText = ""
+
+    private var segments: List<Segment> = emptyList()
+
+    /** Base URL of the in-progress online read. */
+    private var onlineUrl = ""
+
+    /** Index of the piece currently playing, or -1 before the first one starts. */
+    private var playIndex = -1
+
+    /** Staged but not yet playing, keyed by piece index. */
+    private val staged = ConcurrentHashMap<Int, File>()
+
+    /** In-flight fetches, keyed by piece index. */
+    private val fetchJobs = ConcurrentHashMap<Int, Job>()
+
+    /** Serialises the check-and-register in [fetchSegment]. */
+    private val fetchLock = Any()
+
+    /** Pieces whose fetch failed, with the reason, so the read can fall back. */
+    private val failed = ConcurrentHashMap<Int, String>()
+
+    /** Set while playback has run past the end of a piece with the next one unfetched. */
+    private var awaitingNext = false
+
+    /**
+     * True while a piece is actually in the player.
+     *
+     * [advanceIfPossible] must never start a piece while one is playing. With
+     * prefetching enabled the next piece is synthesised *during* the current one, so
+     * "the next piece is available" is the normal condition rather than a signal that
+     * the current one has ended. Advancing on availability alone cut every piece off
+     * mid-sentence and hopped forward through the passage — the read "jumped the
+     * text" and made no sense.
+     */
+    private var playingSegment = false
+
+    /**
+     * The tier already announced through [Listener.onStart]. Segmentation means
+     * several pieces play in one logical utterance, so the start is reported once
+     * for the read rather than once per piece.
+     */
+    private var reportedEngine: TtsEngineKind? = null
+
+    /**
+     * Set while [startOfflineUtterance] is dispatching, so the progress callback is
+     * only accepted for the utterance actually being started.
      *
      * Without this, a *late* `onRange` from an utterance that [pause] already
      * stopped can overwrite the resume point — the platform engine is not required
@@ -128,6 +211,29 @@ class TtsEngine(
     val isPaused: Boolean get() = state.isPaused
     val currentEngine: TtsEngineKind? get() = state.engine
 
+    /** True while the read has run past a piece and is waiting for the next one. */
+    val isBufferingNext: Boolean get() = awaitingNext
+
+    /** Characters spoken so far, for an approximate progress read. */
+    val spokenChars: Int
+        get() = when (val current = state) {
+            // Measured against the passage, not the chunk: after a mid-passage
+            // fallback the chunk is the remainder, and reporting its offset would
+            // make the bar jump backwards.
+            is PlaybackState.Offline -> current.originInPassage + current.charOffset
+            is PlaybackState.Online -> segments.getOrNull(playIndex)?.startChar ?: 0
+            PlaybackState.Idle -> 0
+        }
+
+    /** Characters in the passage being read. */
+    val totalChars: Int get() = fullText.length
+
+    /** How many pieces the current read is split into; 0 when offline or idle. */
+    val segmentCount: Int get() = segments.size
+
+    /** 1-based index of the piece playing; 0 when nothing is segmented. */
+    val segmentIndex: Int get() = if (playIndex < 0) 0 else playIndex + 1
+
     // ── Public API ────────────────────────────────────────────────────────────
 
     /**
@@ -136,7 +242,21 @@ class TtsEngine(
      * Empty or whitespace-only input is refused with a reported error rather than
      * being sent to the backend or silently ignored.
      */
-    fun speak(raw: CharSequence?) {
+    fun speak(raw: CharSequence?) = speakFrom(raw, fromChar = 0)
+
+    /**
+     * Speak [raw], starting at [fromChar].
+     *
+     * This is what makes a passage survivable across app launches: a read-aloud app
+     * is used in bursts, and coming back to a long passage and hearing it restart
+     * from the top is the difference between usable and not. The engine is the right
+     * place for the offset because it already knows where each piece begins.
+     *
+     * The offset is clamped into the text, so a stale stored position — the passage
+     * was edited shorter in the meantime — starts the read somewhere valid rather
+     * than at the end or past it.
+     */
+    fun speakFrom(raw: CharSequence?, fromChar: Int) {
         supersede()
 
         when (val validation = TextLimits.validate(raw)) {
@@ -145,11 +265,13 @@ class TtsEngine(
                 listener?.onError("Nothing to read", null)
             }
 
-            is TextValidation.Ready -> start(validation.text, truncatedFrom = null)
+            is TextValidation.Ready ->
+                start(validation.text, truncatedFrom = null, fromChar = fromChar)
 
             is TextValidation.Truncated -> start(
                 validation.text,
                 truncatedFrom = validation.originalLength,
+                fromChar = fromChar,
             )
         }
     }
@@ -163,7 +285,12 @@ class TtsEngine(
     fun pause() {
         when (val current = state) {
             is PlaybackState.Online -> {
-                if (player.pause()) {
+                // Between pieces there is nothing to pause in the player, but the
+                // read must still stop advancing — otherwise pausing would be a
+                // no-op the user could not distinguish from a failure.
+                val paused = if (awaitingNext) true else player.pause()
+                if (paused) {
+                    playingSegment = false
                     state = current.copy(positionMs = player.currentPositionMs(), paused = true)
                     listener?.onPaused(TtsEngineKind.ONLINE)
                 }
@@ -189,11 +316,19 @@ class TtsEngine(
     fun resume() {
         when (val current = state) {
             is PlaybackState.Online -> {
-                if (current.paused && player.resume()) {
-                    state = current.copy(paused = false)
-                    listener?.onResumed(TtsEngineKind.ONLINE)
-                } else if (current.paused) {
-                    listener?.onError("Could not resume audio", null)
+                if (!current.paused) return
+                state = current.copy(paused = false)
+                listener?.onResumed(TtsEngineKind.ONLINE)
+
+                // The player is the authority on whether a stream was paused
+                // mid-piece. A read paused *between* pieces has nothing to resume, so
+                // ask the player first and fall through to starting the next piece.
+                // (Deciding this from a bookkeeping flag went wrong as soon as the
+                // flag and the player could disagree.)
+                if (player.resume()) {
+                    playingSegment = true
+                } else {
+                    advanceIfPossible()
                 }
             }
 
@@ -207,11 +342,103 @@ class TtsEngine(
                 val from = current.charOffset
                 state = current.copy(paused = false)
                 listener?.onResumed(TtsEngineKind.OFFLINE)
-                speakOffline(current.text, fromChar = from, reportedFallback = null)
+                speakOffline(
+                    current.text,
+                    fromChar = from,
+                    reportedFallback = null,
+                    originInPassage = current.originInPassage,
+                )
             }
 
             PlaybackState.Idle -> listener?.onError("Nothing to resume", null)
         }
+    }
+
+    /**
+     * Speak a short sample of [voiceId] and stop.
+     *
+     * This exists because choosing a voice by reading a name is guesswork. The
+     * gateway can synthesise four voices and they sound different, so the only
+     * honest way to pick one is to hear it — the founder asked to compare voices and
+     * found the others "robotic", which is not a judgement a label can support.
+     *
+     * It is deliberately not [speak]: it must not become the passage, must not be
+     * resumable, and must not be carried on. Conflating the two would overwrite the
+     * reading position with a sample.
+     *
+     * It always uses the online voice. A sample of the offline voice would tell the
+     * user nothing about the neural voice they are choosing, and the offline engine's
+     * readiness cost would make the preview slow for no benefit.
+     */
+    fun preview(text: String, voiceId: String) {
+        val trimmed = text.trim()
+        if (trimmed.isEmpty()) {
+            listener?.onError("Nothing to preview", null)
+            return
+        }
+        val url = settings.backendUrl.trim()
+        if (!settings.preferOnline || url.isEmpty()) {
+            listener?.onError("Voice preview needs the online voice", null)
+            return
+        }
+
+        supersede()
+        val myGeneration = generation
+        state = PlaybackState.Idle
+        isPreviewing = true
+        listener?.onStart(TtsEngineKind.ONLINE)
+
+        val job = scope.launch {
+            // A sample is one short request, so it needs no chunking.
+            val result = transport.fetch(
+                text = trimmed,
+                voice = voiceId,
+                speed = effectiveSpeed(),
+                baseUrl = url,
+            )
+            withContext(mainDispatcher) {
+                if (myGeneration != generation) return@withContext
+                when (result) {
+                    is SynthesisResult.Failure -> {
+                        isPreviewing = false
+                        state = PlaybackState.Idle
+                        listener?.onError(result.reason, null)
+                    }
+
+                    is SynthesisResult.Success -> {
+                        val file = writeTempFile(result.bytes)
+                        currentFile = file
+                        val started = player.play(
+                            file = file,
+                            onCompletion = {
+                                if (myGeneration != generation) return@play
+                                isPreviewing = false
+                                currentFile?.delete()
+                                currentFile = null
+                                state = PlaybackState.Idle
+                                listener?.onComplete()
+                            },
+                            onError = { msg ->
+                                if (myGeneration != generation) return@play
+                                isPreviewing = false
+                                currentFile?.delete()
+                                currentFile = null
+                                state = PlaybackState.Idle
+                                listener?.onError(msg, null)
+                            },
+                        )
+                        if (!started) {
+                            file.delete()
+                            currentFile = null
+                            isPreviewing = false
+                            state = PlaybackState.Idle
+                            listener?.onError("The sample could not be played", null)
+                        }
+                    }
+                }
+            }
+        }
+        inFlight = job
     }
 
     /** Stop and release everything. Safe to call in any state. */
@@ -232,34 +459,53 @@ class TtsEngine(
     // ── Internals ─────────────────────────────────────────────────────────────
 
     /**
-     * Cancel any in-flight request and release current playback, deleting the temp
-     * file. Called before every new request and by [stop] / [shutdown].
+     * Cancel any outstanding work and release current playback, deleting every
+     * staged file. Called before every new request and by [stop] / [shutdown].
      */
     private fun supersede() {
         generation++
         inFlight?.cancel()
         inFlight = null
+        fetchJobs.values.forEach { it.cancel() }
+        fetchJobs.clear()
         player.stop()
         offline.stop()
         acceptingProgress = false
+        // The playing piece is tracked separately, so it is not in `staged`.
         currentFile?.delete()
         currentFile = null
+        staged.values.forEach { it.delete() }
+        staged.clear()
+        failed.clear()
+        segments = emptyList()
+        fullText = ""
+        onlineUrl = ""
+        playIndex = -1
+        awaitingNext = false
+        playingSegment = false
+        reportedEngine = null
     }
 
-    private fun start(text: String, truncatedFrom: Int?) {
+    private fun start(text: String, truncatedFrom: Int?, fromChar: Int = 0) {
         if (truncatedFrom != null) {
             // Say what will actually be read, before reading it.
             listener?.onError(
-                "Text truncated to $MAX_TTS_CHARS characters ($truncatedFrom offered)",
+                "Text truncated to $MAX_INPUT_CHARS characters ($truncatedFrom offered)",
                 null,
             )
         }
 
+        fullText = text
         val url = settings.backendUrl.trim()
+
+        // A resume offset only makes sense inside the text. Clamping here keeps the
+        // invariant local: nothing below has to defend against a bad offset.
+        val from = fromChar.coerceIn(0, text.length)
+
         if (settings.preferOnline && url.isNotEmpty()) {
-            speakOnline(text, url)
+            speakOnline(text, url, from)
         } else {
-            speakOffline(text, fromChar = 0, reportedFallback = null)
+            speakOffline(text, fromChar = from, reportedFallback = null)
         }
     }
 
@@ -270,88 +516,336 @@ class TtsEngine(
      */
     private fun effectiveSpeed(): Float = SpeedSteps.clamp(settings.speed)
 
-    private fun speakOnline(text: String, url: String) {
-        val myGeneration = generation
-        val job = scope.launch {
-            val result = transport.fetch(
-                text = text,
-                voice = settings.voice,
-                speed = effectiveSpeed(),
-                baseUrl = url,
-            )
+    // ── Online, piece by piece ────────────────────────────────────────────────
 
-            // Superseded while the request was in flight: drop the result.
-            if (myGeneration != generation || !isActive) return@launch
+    /**
+     * Plan the read and fetch the first piece.
+     *
+     * The pieces are the whole passage, in order, so playing them in sequence reads
+     * exactly what the user offered. The first piece is short on purpose: its
+     * synthesis is what the user waits for before hearing anything.
+     */
+    private fun speakOnline(text: String, url: String, fromChar: Int = 0) {
+        onlineUrl = url
+        segments = planSegments(text)
 
-            when (result) {
-                is SynthesisResult.Success -> {
-                    val file = try {
-                        writeTempFile(result.bytes)
-                    } catch (e: Exception) {
-                        Log.w(TAG, "could not stage audio: ${e.message}")
-                        withContext(mainDispatcher) {
-                            if (myGeneration == generation) {
-                                reportFallback(text, "Could not store audio")
+        // Resume at a piece boundary: the first piece that still has text at or after
+        // the offset. Starting mid-piece would begin mid-word, so the read picks up
+        // from the start of the piece containing the offset — the most the user can
+        // reasonably expect, and it never skips speech.
+        //
+        // `playIndex` is the piece *playing* and advanceIfPossible starts
+        // `playIndex + 1`, so the wanted piece is reached by beginning one before it.
+        // Nothing else on the advance or prefetch path needs to know about offsets.
+        val firstToPlay = segments.indexOfFirst { it.startChar + it.text.length > fromChar }
+
+        if (firstToPlay < 0) {
+            // The offset is at or past the end: there is genuinely nothing to read.
+            // Leave nothing staged rather than reading the tail of the passage back.
+            playIndex = segments.lastIndex
+            awaitingNext = false
+            playingSegment = false
+            state = PlaybackState.Idle
+            return
+        }
+
+        playIndex = firstToPlay - 1
+        awaitingNext = false
+        playingSegment = false
+        schedulePrefetch()
+    }
+
+    private fun planSegments(text: String): List<Segment> {
+        var start = 0
+        return SpeechChunker.splitForStreaming(text).map { piece ->
+            val segment = Segment(piece, start)
+            start += piece.length
+            segment
+        }
+    }
+
+    /**
+     * Fetch the piece needed next, and [prefetchDepth] further pieces ahead of it,
+     * skipping pieces already staged or in flight.
+     *
+     * The piece after the one playing is always fetched — [prefetchDepth] controls
+     * only how far *beyond* it the engine reads ahead. Expressing it that way is
+     * what lets a test set the depth to 0 and still get a working, strictly
+     * sequential read.
+     *
+     * Idempotent: it is called whenever the playing piece or its availability
+     * changes, and what to fetch is decided per index rather than by a cursor.
+     */
+    private fun schedulePrefetch() {
+        if (segments.isEmpty()) return
+        val base = playIndex
+        val last = minOf(base + 1 + prefetchDepth, segments.lastIndex)
+        for (i in (base + 1)..last) {
+            if (i < 0) continue
+            if (staged.containsKey(i) || fetchJobs.containsKey(i)) continue
+            fetchSegment(generation, onlineUrl, i)
+        }
+    }
+
+    /**
+     * Fetch [index] unless it is already staged or already being fetched.
+     *
+     * The check and the registration happen inside one lock, because two callers can
+     * reach the same index concurrently: a completion callback and a prefetch both
+     * call `schedulePrefetch()`. A check-then-set guard would let both through and
+     * issue the same request twice.
+     *
+     * A duplicate request is not merely wasteful. It synthesises the piece again, so
+     * on a metered connection and a paid provider it costs real money, and a repeated
+     * piece mid-passage is audible.
+     */
+    private fun fetchSegment(myGeneration: Int, url: String, index: Int) {
+        if (index !in segments.indices) return
+
+        synchronized(fetchLock) {
+            if (staged.containsKey(index) || fetchJobs.containsKey(index)) return
+
+            fetchJobs[index] = scope.launch {
+                val segment = segments[index]
+
+                val result = transport.fetch(
+                    text = segment.text,
+                    voice = settings.voice,
+                    speed = effectiveSpeed(),
+                    baseUrl = url,
+                )
+
+                // Superseded while the request was in flight: drop the result.
+                if (myGeneration != generation || !isActive) return@launch
+
+                when (result) {
+                    is SynthesisResult.Success -> {
+                        val file = try {
+                            writeTempFile(result.bytes)
+                        } catch (e: Exception) {
+                            Log.w(TAG, "could not stage piece $index: ${e.message}")
+                            withContext(mainDispatcher) {
+                                if (myGeneration == generation) {
+                                    onSegmentFailed(index, "Could not store audio")
+                                }
                             }
+                            return@launch
                         }
-                        return@launch
-                    }
 
-                    // Take ownership synchronously, with no suspension point between
-                    // staging and this assignment. From here every cancellation path
-                    // (a new speak, stop, shutdown) runs supersede(), which deletes
-                    // currentFile — so a cancellation landing during the hop to the
-                    // main dispatcher cannot orphan the file. Relying on a delete
-                    // inside the hop would miss exactly that cancellation, which is
-                    // how staged files accumulated in the device protocol.
-                    currentFile = file
+                        // Take ownership synchronously, with no suspension point between
+                        // staging and this assignment. From here every cancellation path
+                        // (a new speak, stop, shutdown) runs supersede(), which deletes
+                        // everything staged — so a cancellation landing during the hop to
+                        // the main dispatcher cannot orphan the file.
+                        staged[index] = file
 
-                    if (myGeneration != generation) {
-                        releaseStagedFile(file)
-                        return@launch
-                    }
-
-                    withContext(mainDispatcher) {
-                        // Re-check on the main thread: a newer speak() may have run
-                        // between the check above and this hop.
-                        if (myGeneration != generation) {
-                            releaseStagedFile(file)
-                        } else {
-                            playStagedFile(file, text)
+                        withContext(mainDispatcher) {
+                            fetchJobs.remove(index)
+                            if (myGeneration != generation) {
+                                staged.remove(index)?.delete()
+                                return@withContext
+                            }
+                            onSegmentReady(index)
                         }
                     }
-                }
 
-                is SynthesisResult.Failure -> {
-                    withContext(mainDispatcher) {
-                        if (myGeneration == generation) reportFallback(text, result.reason)
+                    is SynthesisResult.Failure -> withContext(mainDispatcher) {
+                        fetchJobs.remove(index)
+                        if (myGeneration == generation) onSegmentFailed(index, result.reason)
                     }
                 }
             }
         }
-        inFlight = job
     }
 
-    private fun playStagedFile(file: File, text: String) {
+    /** A piece has been synthesised and staged. */
+    private fun onSegmentReady(index: Int) {
+        // Start the next piece now, so it is synthesised during this one's playback.
+        schedulePrefetch()
+
+        val current = state
+        if (current is PlaybackState.Online && current.paused) return
+        advanceIfPossible()
+    }
+
+    /** A piece could not be synthesised. */
+    private fun onSegmentFailed(index: Int, reason: String) {
+        failed[index] = reason
+        // A failure further ahead does not interrupt what is playing; it is
+        // reported when the read reaches it. A failure of the piece needed now
+        // (or of the one playing) must fall back immediately.
+        if (index <= playIndex + 1) reportFallback(index, reason)
+    }
+
+    /**
+     * Play the next piece if it is staged, fall back if its fetch failed, or wait
+     * for it if it is still being synthesised.
+     *
+     * Waiting rather than reporting completion is the honest behaviour: reporting
+     * completion would tell the user the passage had been read when part of it had
+     * not.
+     */
+    private fun advanceIfPossible() {
+        if (segments.isEmpty()) return
+
+        // Keep the pipeline fed. The piece after the playing one must always be
+        // requested, and this is the single place every path passes through when the
+        // playing piece changes — so scheduling here is what guarantees the read can
+        // never stall waiting for a piece nobody asked for.
+        schedulePrefetch()
+
+        // A piece is in the player: the next one is ready (that is the whole point of
+        // prefetching) but the user is still listening to this one. Starting it here
+        // would cut the current piece off mid-sentence.
+        if (playingSegment) return
+
+        // Paused between pieces: the pending piece must wait for [resume].
+        val current = state
+        if (current is PlaybackState.Online && current.paused) return
+
+        val next = playIndex + 1
+        if (next > segments.lastIndex) {
+            finish()
+            return
+        }
+
+        val file = staged[next]
+        if (file == null) {
+            val reason = failed[next]
+            if (reason != null) {
+                reportFallback(next, reason)
+            } else {
+                awaitingNext = true
+            }
+            return
+        }
+
+        awaitingNext = false
+        playSegment(next, file)
+    }
+
+    private fun playSegment(index: Int, file: File) {
+        // Ownership moves from `staged` to `currentFile`; the file is deleted when
+        // this piece finishes, on error, or on supersession.
+        staged.remove(index)
         currentFile = file
+        playIndex = index
 
         val started = player.play(
             file = file,
-            onCompletion = { finish() },
+            onCompletion = { onSegmentFinished(index) },
             onError = { msg -> onPlaybackError(msg) },
         )
 
-        if (started) {
-            state = PlaybackState.Online(text = text, positionMs = 0, paused = false)
-            listener?.onStart(TtsEngineKind.ONLINE)
-        } else {
+        if (!started) {
             // A 200 carrying bytes that are not decodable audio lands here.
-            Log.w(TAG, "staged audio could not be played; falling back")
-            file.delete()
+            Log.w(TAG, "staged audio for piece $index could not be played; falling back")
+            currentFile?.delete()
             currentFile = null
-            reportFallback(text, "Audio could not be played")
+            reportFallback(index, "Audio could not be played")
+            return
+        }
+
+        playingSegment = true
+        state = PlaybackState.Online(text = fullText, positionMs = 0, paused = false)
+        if (reportedEngine != TtsEngineKind.ONLINE) {
+            reportedEngine = TtsEngineKind.ONLINE
+            listener?.onStart(TtsEngineKind.ONLINE)
         }
     }
+
+    /** The piece now playing reached its end. */
+    private fun onSegmentFinished(index: Int) {
+        currentFile?.delete()
+        currentFile = null
+        // Clear before advancing: this is the one moment the next piece is allowed
+        // to start.
+        playingSegment = false
+        advanceIfPossible()
+    }
+
+    /**
+     * Abandon the segmented plan and speak from [fromIndex] onwards with the
+     * offline voice, so the remainder of the passage is still heard.
+     */
+    private fun reportFallback(fromIndex: Int, reason: String) {
+        Log.w(TAG, "online synthesis failed at piece $fromIndex ($reason); falling back to offline voice")
+
+        // The remaining text is the failing piece and everything after it: the
+        // pieces partition the passage, so this is exactly what has not been read.
+        // Joining the tail matters — taking only the failing piece would speak one
+        // request's worth and silently drop the rest of the passage.
+        val remaining = segments.drop(fromIndex).joinToString("") { it.text }
+            .ifBlank { fullText }
+
+        // Captured before `segments` is cleared below: this is where the remainder
+        // begins in the passage, and progress is reported against the passage.
+        val remainderOrigin = segments.getOrNull(fromIndex)?.startChar ?: 0
+
+        fetchJobs.values.forEach { it.cancel() }
+        fetchJobs.clear()
+        staged.values.forEach { it.delete() }
+        staged.clear()
+        failed.clear()
+        currentFile?.delete()
+        currentFile = null
+        player.stop()
+        segments = emptyList()
+        playIndex = -1
+        awaitingNext = false
+        playingSegment = false
+        reportedEngine = null
+
+        whenOfflineReady(
+            onUnavailable = {
+                // There is nothing to fall back to, so do not report one: claiming a
+                // fallback that cannot happen would misstate what the user hears.
+                state = PlaybackState.Idle
+                listener?.onError("$reason. Offline voice is unavailable", null)
+            },
+            action = {
+                // Report the degradation even though speech continues: the user asked
+                // for the neural voice and is about to hear the platform one, so a
+                // silent substitution would misrepresent what is being spoken.
+                listener?.onError(reason, TtsEngineKind.OFFLINE)
+                // The remainder starts where the failing piece started, so progress
+                // continues to be measured against the passage the user offered.
+                startOfflineUtterance(
+                    text = remaining,
+                    fromChar = 0,
+                    reportedFallback = null,
+                    originInPassage = remainderOrigin,
+                )
+            },
+        )
+    }
+
+    private fun onPlaybackError(msg: String) {
+        currentFile?.delete()
+        currentFile = null
+        playingSegment = false
+        state = PlaybackState.Idle
+        listener?.onError(msg, null)
+    }
+
+    private fun finish() {
+        currentFile?.delete()
+        currentFile = null
+        playingSegment = false
+        staged.values.forEach { it.delete() }
+        staged.clear()
+        failed.clear()
+        state = PlaybackState.Idle
+        listener?.onComplete()
+    }
+
+    private fun writeTempFile(bytes: ByteArray): File {
+        val file = File(cacheDir, "sonata_${UUID.randomUUID()}.mp3")
+        file.writeBytes(bytes)
+        return file
+    }
+
+    // ── Offline ───────────────────────────────────────────────────────────────
 
     /**
      * Speak [text] offline from [fromChar].
@@ -359,7 +853,12 @@ class TtsEngine(
      * The state is committed before [OfflineVoice.speak] so the progress callback
      * has a state to update, and is rolled back if the utterance fails to start.
      */
-    private fun speakOffline(text: String, fromChar: Int, reportedFallback: String?) {
+    private fun speakOffline(
+        text: String,
+        fromChar: Int,
+        reportedFallback: String?,
+        originInPassage: Int = 0,
+    ) {
         whenOfflineReady(
             onUnavailable = {
                 state = PlaybackState.Idle
@@ -369,7 +868,9 @@ class TtsEngine(
                     null,
                 )
             },
-            action = { startOfflineUtterance(text, fromChar, reportedFallback) },
+            action = {
+                startOfflineUtterance(text, fromChar, reportedFallback, originInPassage)
+            },
         )
     }
 
@@ -387,7 +888,7 @@ class TtsEngine(
         }
 
         val myGeneration = generation
-        scope.launch {
+        val job = scope.launch {
             val ready = offline.awaitReady(offlineReadyTimeoutMs)
             withContext(mainDispatcher) {
                 // A newer speak()/stop() superseded this request while we waited.
@@ -395,11 +896,21 @@ class TtsEngine(
                 if (ready) action() else onUnavailable()
             }
         }
+        inFlight = job
     }
 
-    private fun startOfflineUtterance(text: String, fromChar: Int, reportedFallback: String?) {
-
-        state = PlaybackState.Offline(text = text, charOffset = fromChar, paused = false)
+    private fun startOfflineUtterance(
+        text: String,
+        fromChar: Int,
+        reportedFallback: String?,
+        originInPassage: Int = 0,
+    ) {
+        state = PlaybackState.Offline(
+            text = text,
+            charOffset = fromChar,
+            paused = false,
+            originInPassage = originInPassage,
+        )
         acceptingProgress = true
         var started = false
 
@@ -411,6 +922,7 @@ class TtsEngine(
             onStart = {
                 if (!started) {
                     started = true
+                    reportedEngine = TtsEngineKind.OFFLINE
                     listener?.onStart(TtsEngineKind.OFFLINE)
                 }
             },
@@ -442,60 +954,9 @@ class TtsEngine(
 
         // Some platform engines never invoke onStart; report the start here if so.
         if (!started && state is PlaybackState.Offline) {
+            reportedEngine = TtsEngineKind.OFFLINE
             listener?.onStart(TtsEngineKind.OFFLINE)
         }
-    }
-
-    private fun reportFallback(text: String, reason: String) {
-        Log.w(TAG, "online synthesis failed ($reason); falling back to offline voice")
-
-        whenOfflineReady(
-            onUnavailable = {
-                // There is nothing to fall back to, so do not report one: claiming a
-                // fallback that cannot happen would misstate what the user hears.
-                state = PlaybackState.Idle
-                listener?.onError("$reason. Offline voice is unavailable", null)
-            },
-            action = {
-                // Report the degradation even though speech continues: the user asked
-                // for the neural voice and is about to hear the platform one, so a
-                // silent substitution would misrepresent what is being spoken.
-                listener?.onError(reason, TtsEngineKind.OFFLINE)
-                startOfflineUtterance(text, fromChar = 0, reportedFallback = null)
-            },
-        )
-    }
-
-    private fun onPlaybackError(msg: String) {
-        currentFile?.delete()
-        currentFile = null
-        state = PlaybackState.Idle
-        listener?.onError(msg, null)
-    }
-
-    private fun finish() {
-        currentFile?.delete()
-        currentFile = null
-        state = PlaybackState.Idle
-        listener?.onComplete()
-    }
-
-    /**
-     * Release a staged file and stop tracking it.
-     *
-     * The identity check matters: a superseded coroutine resumes after a newer
-     * request has already staged its own file, and unconditionally clearing
-     * [currentFile] would drop that newer file from tracking and leak it instead.
-     */
-    private fun releaseStagedFile(file: File) {
-        file.delete()
-        if (currentFile === file) currentFile = null
-    }
-
-    private fun writeTempFile(bytes: ByteArray): File {
-        val file = File(cacheDir, "sonata_${UUID.randomUUID()}.mp3")
-        file.writeBytes(bytes)
-        return file
     }
 
     companion object {

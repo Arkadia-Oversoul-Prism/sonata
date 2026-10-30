@@ -1,0 +1,163 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Sonata's design tokens.
+
+  Every surface, text role and control shape in the app is defined here once, so
+  the reading screen, the floating player and the bubble read as one product
+  rather than three screens that happen to share a palette.
+-->
+<resources>
+
+    <!-- ── Spacing ───────────────────────────────────────────────────────────
+         A 4dp base grid. Named by role, not by size, so the rhythm survives a
+         change of scale. -->
+    <dimen name="space_xs">4dp</dimen>
+    <dimen name="space_sm">8dp</dimen>
+    <dimen name="space_md">12dp</dimen>
+    <dimen name="space_lg">16dp</dimen>
+    <dimen name="space_xl">24dp</dimen>
+    <dimen name="space_2xl">32dp</dimen>
+
+    <!-- Screen gutter: 20dp reads as deliberate rather than cramped. -->
+    <dimen name="gutter">20dp</dimen>
+
+    <!-- ── Shape ───────────────────────────────────────────────────────────── -->
+    <dimen name="radius_sm">10dp</dimen>
+    <dimen name="radius_md">14dp</dimen>
+    <dimen name="radius_lg">20dp</dimen>
+    <dimen name="radius_pill">999dp</dimen>
+
+    <!-- ── Touch targets ─────────────────────────────────────────────────────
+         Material's 48dp minimum. One-handed use makes this a floor, not a
+         target: the primary control is larger still. -->
+    <dimen name="touch_min">48dp</dimen>
+    <dimen name="touch_primary">64dp</dimen>
+
+    <!-- ── Type scale ────────────────────────────────────────────────────────
+         Four roles only. A reading app needs a clear hierarchy and no more:
+         the passage the user is reading, the state of the read, the controls,
+         and quiet metadata. -->
+    <dimen name="text_display">30sp</dimen>
+    <dimen name="text_title">20sp</dimen>
+    <dimen name="text_body">16sp</dimen>
+    <dimen name="text_label">13sp</dimen>
+    <dimen name="text_meta">12sp</dimen>
+
+    <!-- ── Text styles ─────────────────────────────────────────────────────── -->
+
+    <!-- The one piece of the passage currently being read. -->
+    <style name="Text.Sonata.Display" parent="">
+        <item name="android:textSize">@dimen/text_display</item>
+        <item name="android:textColor">@color/text_primary</item>
+        <item name="android:textStyle">bold</item>
+        <item name="android:letterSpacing">-0.01</item>
+        <item name="android:includeFontPadding">false</item>
+    </style>
+
+    <style name="Text.Sonata.Title" parent="">
+        <item name="android:textSize">@dimen/text_title</item>
+        <item name="android:textColor">@color/text_primary</item>
+        <item name="android:textStyle">bold</item>
+        <item name="android:includeFontPadding">false</item>
+    </style>
+
+    <style name="Text.Sonata.Body" parent="">
+        <item name="android:textSize">@dimen/text_body</item>
+        <item name="android:textColor">@color/text_primary</item>
+        <item name="android:lineSpacingMultiplier">1.45</item>
+    </style>
+
+    <style name="Text.Sonata.Label" parent="">
+        <item name="android:textSize">@dimen/text_label</item>
+        <item name="android:textColor">@color/text_secondary</item>
+    </style>
+
+    <!-- Section headings: the only place letter-spacing is used, so it reads as a
+         system rather than as decoration. -->
+    <style name="Text.Sonata.Section" parent="">
+        <item name="android:textSize">11sp</item>
+        <item name="android:textColor">@color/text_dim</item>
+        <item name="android:letterSpacing">0.18</item>
+        <item name="android:textAllCaps">true</item>
+    </style>
+
+    <!-- The product wordmark. -->
+    <style name="Text.Sonata.Wordmark" parent="">
+        <item name="android:textSize">13sp</item>
+        <item name="android:textColor">@color/accent_teal</item>
+        <item name="android:letterSpacing">0.32</item>
+        <item name="android:textStyle">bold</item>
+    </style>
+
+    <!-- ── Surfaces ──────────────────────────────────────────────────────────
+         One card treatment, so every raised surface matches. -->
+
+    <style name="Surface.Sonata" parent="">
+        <item name="android:background">@drawable/bg_surface</item>
+        <item name="android:padding">@dimen/space_lg</item>
+    </style>
+
+    <style name="Surface.Sonata.Flat" parent="">
+        <item name="android:background">@drawable/bg_surface_flat</item>
+        <item name="android:padding">@dimen/space_lg</item>
+    </style>
+
+    <!-- ── Buttons ─────────────────────────────────────────────────────────── -->
+
+    <!-- The primary action. Full-width and tall: it is the thing a thumb reaches
+         for without looking. -->
+    <style name="Button.Sonata.Primary" parent="Widget.MaterialComponents.Button">
+        <item name="android:layout_height">@dimen/touch_primary</item>
+        <item name="android:textSize">@dimen/text_body</item>
+        <item name="android:textStyle">bold</item>
+        <item name="android:textColor">@color/bg_dark</item>
+        <item name="android:letterSpacing">0.04</item>
+        <item name="android:textAllCaps">false</item>
+        <item name="android:backgroundTint">@color/accent_teal</item>
+        <item name="android:stateListAnimator">@null</item>
+        <item name="cornerRadius">@dimen/radius_md</item>
+    </style>
+
+    <!-- The secondary action: present, reachable, visually quieter. -->
+    <style name="Button.Sonata.Secondary" parent="Widget.MaterialComponents.Button.OutlinedButton">
+        <item name="android:layout_height">@dimen/touch_min</item>
+        <item name="android:textSize">@dimen/text_label</item>
+        <item name="android:textColor">@color/text_secondary</item>
+        <item name="android:textAllCaps">false</item>
+        <item name="android:letterSpacing">0.02</item>
+        <item name="android:stateListAnimator">@null</item>
+        <item name="android:strokeColor">@color/hairline</item>
+        <item name="cornerRadius">@dimen/radius_sm</item>
+        <item name="android:backgroundTint">@color/transparent</item>
+        <item name="rippleColor">@color/accent_teal_dim</item>
+    </style>
+
+    <!-- A quiet inline control, e.g. the speed pill. -->
+    <style name="Button.Sonata.Chip" parent="Widget.MaterialComponents.Button.OutlinedButton">
+        <item name="android:layout_height">40dp</item>
+        <item name="android:minWidth">0dp</item>
+        <item name="android:minHeight">0dp</item>
+        <item name="android:textSize">@dimen/text_label</item>
+        <item name="android:textColor">@color/text_primary</item>
+        <item name="android:textAllCaps">false</item>
+        <item name="android:insetTop">0dp</item>
+        <item name="android:insetBottom">0dp</item>
+        <item name="android:paddingStart">@dimen/space_md</item>
+        <item name="android:paddingEnd">@dimen/space_md</item>
+        <item name="android:stateListAnimator">@null</item>
+        <item name="android:strokeColor">@color/hairline</item>
+        <item name="cornerRadius">@dimen/radius_pill</item>
+        <item name="android:backgroundTint">@color/bg_raised</item>
+        <item name="rippleColor">@color/accent_teal_dim</item>
+    </style>
+
+    <!-- ── Progress ──────────────────────────────────────────────────────────
+         Slim and quiet: it answers "where am I in the passage?" without
+         competing with the text. -->
+    <style name="Progress.Sonata" parent="Widget.AppCompat.ProgressBar.Horizontal">
+        <item name="android:layout_height">4dp</item>
+        <item name="android:progressDrawable">@drawable/progress_sonata</item>
+        <item name="android:max">1000</item>
+    </style>
+
+</resources>

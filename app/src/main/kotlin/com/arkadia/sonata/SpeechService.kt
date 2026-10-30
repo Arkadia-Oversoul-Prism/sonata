@@ -13,6 +13,7 @@ import androidx.media.app.NotificationCompat.MediaStyle
 // MediaSessionCompat / PlaybackStateCompat live in android.support.v4.media.session
 // inside androidx.media:media:1.7.0 — there is no androidx.media.session package.
 import android.support.v4.media.session.MediaSessionCompat
+import java.util.concurrent.CopyOnWriteArrayList
 import android.support.v4.media.session.PlaybackStateCompat
 
 /**
@@ -20,7 +21,7 @@ import android.support.v4.media.session.PlaybackStateCompat
  * Activities and the overlay bind to it via [LocalBinder].
  *
  * Commands (via startForegroundService + intent action):
- *   ACTION_SPEAK  — extras: EXTRA_TEXT, EXTRA_LABEL
+ *   ACTION_SPEAK  — extras: EXTRA_TEXT, EXTRA_LABEL, EXTRA_FROM_CHAR
  *   ACTION_PAUSE
  *   ACTION_RESUME
  *   ACTION_STOP
@@ -46,10 +47,32 @@ class SpeechService : Service() {
     private var currentEngine: TtsEngineKind? = null
 
     // ── Lifecycle callbacks exposed to bound clients ────────────────────────
-    var onStart:    (() -> Unit)? = null
-    var onPause:    (() -> Unit)? = null
-    var onResume:   (() -> Unit)? = null
-    var onComplete: (() -> Unit)? = null
+    //
+    // A list, not single slots. The main screen and the floating player are both
+    // bound at once, and with one mutable slot per callback whichever client bound
+    // last silently took the callback away from the other. The visible symptom was
+    // a floating player that never dismissed itself when the read finished, and a
+    // main screen whose state went stale while the overlay was up.
+    private val clients = CopyOnWriteArrayList<Client>()
+
+    /** A bound client's interest in playback lifecycle events. */
+    interface Client {
+        fun onStart() {}
+        fun onPause() {}
+        fun onResume() {}
+        fun onComplete() {}
+        fun onError(msg: String) {}
+        /** A voice sample started, so the screen can show it is auditioning. */
+        fun onPreviewStart(voiceId: String) {}
+    }
+
+    fun addClient(client: Client) {
+        if (!clients.contains(client)) clients += client
+    }
+
+    fun removeClient(client: Client) {
+        clients -= client
+    }
 
     /** User-presentable message for the most recent failure, if any. */
     var lastError: String? = null
@@ -58,6 +81,9 @@ class SpeechService : Service() {
     /** Set when the current utterance is offline speech after an online failure. */
     var fellBackOffline: Boolean = false
         private set
+
+    /** The voice being auditioned, while a preview is in flight. */
+    private var previewVoiceId: String? = null
 
     // ── Service lifecycle ──────────────────────────────────────────────────
 
@@ -83,7 +109,19 @@ class SpeechService : Service() {
                 lastError     = null
                 fellBackOffline = false
                 promoteToForeground(playing = true)
-                tts.speak(command.text)
+                tts.speakFrom(command.text, command.fromChar)
+            }
+
+            // A voice sample. It must not touch currentText or the reading position,
+            // and it must not claim the foreground: a one-second sample that leaves a
+            // notification and a foreground service behind is worse than the sample
+            // is good. It runs in the service so it reuses the engine, transport and
+            // player, then stops itself when the utterance completes.
+            is SpeechCommand.Preview -> {
+                previewVoiceId = command.voiceId
+                lastError = null
+                clients.forEach { it.onPreviewStart(command.voiceId) }
+                tts.preview(command.text, command.voiceId)
             }
 
             SpeechCommand.Pause  -> { tts.pause();  updateNotification(playing = false) }
@@ -95,7 +133,7 @@ class SpeechService : Service() {
             SpeechCommand.None -> {
                 if (intent?.action == ACTION_SPEAK) {
                     lastError = "Nothing to read"
-                    onError?.invoke(lastError!!)
+                    clients.forEach { it.onError(lastError!!) }
                 }
                 stopSelf(startId)
             }
@@ -129,11 +167,23 @@ class SpeechService : Service() {
     val isPlaying get() = tts.isPlaying
     val isPaused  get() = tts.isPaused
 
+    /** True while the read has run past a piece and is fetching the next one. */
+    val isBufferingNext: Boolean get() = tts.isBufferingNext
+
+    /** Characters of the passage spoken so far, for a real progress read. */
+    val spokenChars: Int get() = tts.spokenChars
+
+    /** Characters in the passage being read. */
+    val totalChars: Int get() = tts.totalChars
+
+    /** How many pieces the current read is split into; 0 when offline or idle. */
+    val segmentCount: Int get() = tts.segmentCount
+
+    /** 1-based index of the piece playing; 0 when nothing is segmented. */
+    val segmentIndex: Int get() = tts.segmentIndex
+
     /** Which tier is speaking; null when idle. */
     val engineInUse: TtsEngineKind? get() = tts.currentEngine
-
-    /** Callback for user-presentable errors, including errors on the SPEAK path. */
-    var onError: ((String) -> Unit)? = null
 
     // ── TTS listener ───────────────────────────────────────────────────────
 
@@ -142,26 +192,40 @@ class SpeechService : Service() {
             currentEngine = engine
             fellBackOffline = engine == TtsEngineKind.OFFLINE
             updateNotification(playing = true)
-            onStart?.invoke()
+            clients.forEach { it.onStart() }
         }
 
         override fun onPaused(engine: TtsEngineKind) {
             currentEngine = engine
             updateNotification(playing = false)
-            onPause?.invoke()
+            clients.forEach { it.onPause() }
         }
 
         override fun onResumed(engine: TtsEngineKind) {
             currentEngine = engine
             updateNotification(playing = true)
-            onResume?.invoke()
+            clients.forEach { it.onResume() }
         }
 
         override fun onComplete() {
             currentEngine = null
             lastError = null
+
+            // A finished preview is not a finished read. Reporting it as one would
+            // tell the main screen the passage had been read, which it has not, and
+            // the sample is not the passage.
+            if (tts.isPreviewing) {
+                previewVoiceId = null
+                stopForeground(STOP_FOREGROUND_REMOVE)
+                stopSelf()
+                return
+            }
+
             stopForeground(STOP_FOREGROUND_REMOVE)
-            onComplete?.invoke()
+            // Notified before stopSelf(): the service is gone by the time the last
+            // client runs, and a client that only learns of completion from a
+            // destroyed service can never dismiss itself.
+            clients.forEach { it.onComplete() }
             stopSelf()
         }
 
@@ -172,7 +236,7 @@ class SpeechService : Service() {
                 currentEngine = it
                 fellBackOffline = true
             }
-            onError?.invoke(msg)
+            clients.forEach { it.onError(msg) }
             if (fellBackTo == null) {
                 currentEngine = null
                 stopForeground(STOP_FOREGROUND_REMOVE)
@@ -232,14 +296,31 @@ class SpeechService : Service() {
                 .build()
         )
 
-        val preview = currentText.take(80) + if (currentText.length > 80) "…" else ""
+        val preview = currentText.replace(Regex("\\s+"), " ").trim().let {
+            if (it.length <= 72) it else it.take(72) + "…"
+        }
         val engineNote = when (currentEngine) {
             TtsEngineKind.ONLINE  -> "Neural voice"
             TtsEngineKind.OFFLINE -> if (fellBackOffline) "Offline voice (backend unavailable)"
                                      else "Offline voice"
             null                  -> null
         }
-        val body = listOfNotNull(preview.ifBlank { null }, engineNote).joinToString(" · ")
+        // The position is worth showing: a long read is the normal case now, and
+        // "how far in am I?" is the question the shade is opened to answer.
+        val positionNote = if (tts.isBufferingNext) {
+            "Buffering…"
+        } else {
+            val total = tts.totalChars
+            if (total > 0 && tts.isPlaying) {
+                val percent = ((tts.spokenChars.toFloat() / total) * 100).toInt().coerceIn(0, 100)
+                if (tts.segmentCount > 1) "Part ${tts.segmentIndex} of ${tts.segmentCount} · $percent%"
+                else "$percent%"
+            } else {
+                null
+            }
+        }
+        val body = listOfNotNull(preview.ifBlank { null }, positionNote, engineNote)
+            .joinToString(" · ")
 
         return NotificationCompat.Builder(this, SonataApp.CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_sonata)
@@ -277,10 +358,15 @@ class SpeechService : Service() {
 
     companion object {
         const val ACTION_SPEAK  = "com.arkadia.sonata.SPEAK"
+        /** Speak a short sample of one voice and stop. Never a read. */
+        const val ACTION_PREVIEW = "com.arkadia.sonata.PREVIEW"
+        const val EXTRA_VOICE_ID = "voiceId"
         const val ACTION_PAUSE  = "com.arkadia.sonata.PAUSE"
         const val ACTION_RESUME = "com.arkadia.sonata.RESUME"
         const val ACTION_STOP   = "com.arkadia.sonata.STOP"
         const val EXTRA_TEXT    = "text"
         const val EXTRA_LABEL   = "label"
+        /** Character offset to begin reading from; 0 (the default) reads it all. */
+        const val EXTRA_FROM_CHAR = "fromChar"
     }
 }
