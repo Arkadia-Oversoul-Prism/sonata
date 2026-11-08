@@ -1,56 +1,73 @@
 package com.arkadia.sonata.engine
 
 /**
- * Whether a model may be loaded, and whether it may be trained, on a device.
+ * Whether a model may be loaded on a device.
  *
- * Two separate questions, deliberately kept separate. Loading a model is a memory
- * question; training one is a thermal question. Conflating them would either block
- * inference on an unmeasured device (too strict) or allow training on one (too
- * loose).
+ * Pure, so the gate is testable without a device and cannot be bypassed by a
+ * caller that forgets to check. The specification's rule is that a capability is
+ * not advertised before it is measured; this is where "measured" becomes a
+ * decision.
  */
 object ModelCompatibility {
 
     /**
-     * Whether [model] can be loaded on [device].
+     * Headroom kept free above a model's own requirement.
      *
-     * Inference is allowed on any device with the RAM for it. It does not require
-     * thermal validation, because a single synthesis is short and the S0 gate is
-     * about sustained training, not about one utterance.
+     * A model that exactly fills RAM will be killed by the low-memory killer the
+     * first time the user opens another app. The margin is what makes "it loaded
+     * once in a test" different from "it works".
      */
-    fun canLoad(model: ModelDescriptor, device: DeviceProfile): Boolean {
-        if (device.totalRamBytes <= 0) return false
-        return device.availableRamBytes >= model.minRamBytes
+    const val RAM_HEADROOM = 1.5
+
+    /** Storage headroom, for the model plus its working files. */
+    const val STORAGE_HEADROOM = 1.2
+
+    /**
+     * Whether [descriptor] can be loaded on [device].
+     *
+     * Both RAM and storage are checked, and both with headroom. A model that fails
+     * either is refused *before* load, so the failure is a clear message rather
+     * than an out-of-memory kill mid-synthesis.
+     */
+    fun canLoad(descriptor: ModelDescriptor, device: DeviceProfile): Boolean {
+        val ramNeeded = (descriptor.minRamBytes * RAM_HEADROOM).toLong()
+        val storageNeeded = (descriptor.sizeBytes * STORAGE_HEADROOM).toLong()
+        return device.ramBytes >= ramNeeded && device.freeStorageBytes >= storageNeeded
     }
 
     /**
-     * Whether [model] can be **trained** on [device].
+     * Whether on-device **adaptation** (training) may run on [device].
      *
-     * Requires [DeviceProfile.thermalValidated]. This is the specification's
-     * non-negotiable: on-device training is not advertised until it is measured.
-     * An unmeasured device gets `false`, which is the safe answer.
+     * Stricter than [canLoad] on purpose. Training holds the base model, the
+     * adapter, the optimiser state and the dataset in memory at once, and it runs
+     * long enough to heat the device. It therefore requires the thermal
+     * measurement to have passed, which inference does not.
+     *
+     * Until the Phase 7 harness has run, [DeviceProfile.thermalValidated] is false
+     * and this returns false — which is the correct, honest state: adaptation is
+     * refused rather than attempted and failed.
      */
-    fun canAdapt(model: ModelDescriptor, device: DeviceProfile): Boolean {
-        if (!model.isTrainable) return false
+    fun canAdapt(device: DeviceProfile, base: ModelDescriptor, adapterBytes: Long): Boolean {
         if (!device.thermalValidated) return false
-        // Training needs more headroom than inference: gradients, optimizer state
-        // and the checkpoint all live alongside the model.
-        return device.availableRamBytes >= model.minRamBytes * 2
+        val ramNeeded = ((base.minRamBytes + adapterBytes) * ADAPT_RAM_HEADROOM).toLong()
+        val storageNeeded = ((base.sizeBytes + adapterBytes) * STORAGE_HEADROOM).toLong()
+        return device.ramBytes >= ramNeeded && device.freeStorageBytes >= storageNeeded
     }
 
     /**
-     * Why [model] cannot be adapted on [device], for the UI to show.
-     *
-     * A refusal the user cannot understand is indistinguishable from a bug, so the
-     * reason is a first-class return value rather than a log line.
+     * Training needs more headroom than inference: the optimiser state and the
+     * activations are held alongside the weights.
      */
-    fun adaptationRefusal(model: ModelDescriptor, device: DeviceProfile): String? = when {
-        !model.isTrainable ->
-            "This model is a base voice and is never trained on-device."
-        !device.thermalValidated ->
-            "On-device training has not been validated on this device yet. " +
-                "Enrollment works now; training unlocks once the device passes the benchmark."
-        device.availableRamBytes < model.minRamBytes * 2 ->
-            "This device does not have enough free memory to train a voice model."
+    const val ADAPT_RAM_HEADROOM = 2.5
+
+    /** A user-presentable reason a model was refused, or null when it is allowed. */
+    fun refusalReason(descriptor: ModelDescriptor, device: DeviceProfile): String? = when {
+        device.ramBytes < (descriptor.minRamBytes * RAM_HEADROOM).toLong() ->
+            "This device does not have enough memory for ${descriptor.id}"
+
+        device.freeStorageBytes < (descriptor.sizeBytes * STORAGE_HEADROOM).toLong() ->
+            "There is not enough free storage for ${descriptor.id}"
+
         else -> null
     }
 }

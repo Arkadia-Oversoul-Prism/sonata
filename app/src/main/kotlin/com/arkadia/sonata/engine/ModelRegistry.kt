@@ -3,53 +3,70 @@ package com.arkadia.sonata.engine
 /**
  * The installed-model catalogue.
  *
- * Models are bundled or side-loaded, never downloaded at runtime — the offline
- * boundary forbids a download path. This registry is the list of what is present,
- * and it is the only place that decides which model to use for a device.
+ * Models are **bundled or side-loaded, never downloaded at runtime**. There is no
+ * `download` method here on purpose: the offline boundary is a property of the
+ * type. A first-run import from device storage is the only path in, and it is
+ * [install] with a local file.
  */
-class ModelRegistry(
-    private val models: List<ModelDescriptor> = BundledModels.ALL,
-) {
+interface ModelRegistry {
 
-    /** Every model present in this build. */
-    fun installed(): List<ModelDescriptor> = models
+    /** Every installed model. */
+    fun installed(): List<ModelDescriptor>
 
-    /** The models that can synthesise speech. */
-    fun baseModels(): List<ModelDescriptor> =
-        models.filter { it.role == ModelDescriptor.Role.BASE }
+    /** The installed base synthesizers, best-quality first. */
+    fun baseSynthesizers(): List<ModelDescriptor>
 
-    /** The models that adapt a base voice to a timbre. */
-    fun toneConverters(): List<ModelDescriptor> =
-        models.filter { it.role == ModelDescriptor.Role.TONE_CONVERTER }
+    /** The installed tone-colour converters. */
+    fun toneConverters(): List<ModelDescriptor>
 
-    /** A model by id, or null. */
-    fun byId(id: String): ModelDescriptor? = models.firstOrNull { it.id == id }
+    /** Whether [descriptor] can be loaded on [device]. */
+    fun isCompatible(descriptor: ModelDescriptor, device: DeviceProfile): Boolean
 
-    /**
-     * The best base model this device can load.
-     *
-     * "Best" is highest quality first, which is the specification's priority: the
-     * highest possible natural voice quality while remaining offline. A device that
-     * cannot hold the quality model falls back to the speed model rather than to
-     * nothing.
-     */
-    fun bestBaseFor(device: DeviceProfile): ModelDescriptor? =
-        baseModels()
-            .filter { ModelCompatibility.canLoad(it, device) }
-            .maxByOrNull { it.sizeBytes }
+    /** The best base synthesizer this device can run, or null. */
+    fun bestBaseFor(device: DeviceProfile): ModelDescriptor?
 
-    /** Whether [model] can be loaded on [device]. */
-    fun isCompatible(model: ModelDescriptor, device: DeviceProfile): Boolean =
-        ModelCompatibility.canLoad(model, device)
+    /** Record a model as installed from a local file. */
+    fun install(descriptor: ModelDescriptor)
 
-    /**
-     * Whether on-device adaptation is possible on [device].
-     *
-     * Requires both a trainable converter and a thermally validated device. The
-     * conjunction is the gate: either alone is not enough.
-     */
-    fun canAdaptOn(device: DeviceProfile): Boolean =
-        device.thermalValidated && toneConverters().any {
-            ModelCompatibility.canAdapt(it, device)
-        }
+    /** Remove a model from the catalogue. */
+    fun remove(descriptor: ModelDescriptor)
+}
+
+/**
+ * An in-memory [ModelRegistry].
+ *
+ * The catalogue is small (a handful of models) and is rebuilt from the models
+ * present on disk at startup, so an in-memory implementation is the right shape:
+ * there is no second source of truth to keep in sync, and no migration to write.
+ */
+class InMemoryModelRegistry(
+    initial: List<ModelDescriptor> = emptyList(),
+) : ModelRegistry {
+
+    private val models = initial.toMutableList()
+
+    override fun installed(): List<ModelDescriptor> = models.toList()
+
+    override fun baseSynthesizers(): List<ModelDescriptor> =
+        models.filter { it.role == ModelRole.BASE_SYNTHESIZER }
+            // Larger models are the higher-quality ones in this family; the
+            // specification's priority is quality, so they sort first.
+            .sortedByDescending { it.sizeBytes }
+
+    override fun toneConverters(): List<ModelDescriptor> =
+        models.filter { it.role == ModelRole.TONE_CONVERTER }
+
+    override fun isCompatible(descriptor: ModelDescriptor, device: DeviceProfile): Boolean =
+        ModelCompatibility.canLoad(descriptor, device)
+
+    override fun bestBaseFor(device: DeviceProfile): ModelDescriptor? =
+        baseSynthesizers().firstOrNull { isCompatible(it, device) }
+
+    override fun install(descriptor: ModelDescriptor) {
+        if (models.none { it.id == descriptor.id }) models.add(descriptor)
+    }
+
+    override fun remove(descriptor: ModelDescriptor) {
+        models.removeAll { it.id == descriptor.id }
+    }
 }
