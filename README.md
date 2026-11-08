@@ -1,6 +1,13 @@
 # Sonata — Arkadia Voice App
 
-Android 10+ TTS client for the Arkadia Intelligence System (ARKANA).
+Android 10+ **fully offline** neural voice app for the Arkadia Intelligence System
+(ARKANA).
+
+> **Architecture note.** Sonata is offline-only. There is no online TTS tier, no
+> STT, no cloud voice service and no API key. The voice is the user's own, cloned
+> and trained **on the device**. See `docs/evolution/E10-OFFLINE-PHASES-1-7.md` for
+> the implementation and `docs/evolution/E11-S0-DEVICE-HANDOFF.md` for the device
+> validation that gates on-device training.
 
 ## Features
 
@@ -9,8 +16,13 @@ Android 10+ TTS client for the Arkadia Intelligence System (ARKANA).
 | **PROCESS_TEXT** | Appears as "Speak with Sonata" in every app's text-selection menu |
 | **Floating Overlay** | Draggable black-glass player — play, pause, stop, speed, close |
 | **Foreground Service** | Notification with pause/resume/stop — audio continues in background |
-| **Two TTS tiers** | Online: Arkadia neural voices (Edge TTS via `/api/tts`) · Offline: Android built-in TTS |
-| **Settings** | Voice, speed, pitch, auto-read, backend URL, storage management |
+| **Offline neural TTS** | On-device model behind one swappable runtime abstraction — no network |
+| **Voice Studio** | Guided enrollment, on-device adapter training, generation in your own voice |
+| **Read-Along Canvas** | Cleaned text with sentence-level sync and confidence-gated word highlighting |
+| **Narration Intelligence** | Six-stage planning pipeline with eight delivery styles |
+| **Library** | Every generation saved automatically; rename, favourite, collect, export |
+| **Export** | WAV / M4A / MP3 via MediaStore and SAF, single or batch |
+| **Settings** | Voice, speed, pitch, auto-read, storage management |
 | **Performance** | Cold start < 1 s · Speech start < 2 s · No wakelock abuse |
 
 ## Building
@@ -53,7 +65,9 @@ keytool -genkey -v -keystore sonata-release.jks \
 
 ## Configuration
 
-In the Settings screen, enter your Arkadia backend URL (e.g. `https://arkadia-n26k.onrender.com`) to enable neural voice quality. Leave blank to use offline Android TTS.
+Sonata is fully offline. There is no backend URL to configure and no API key to
+enter. Voice models are bundled or side-loaded from device storage; nothing is
+downloaded at runtime.
 
 ## Permissions
 
@@ -62,4 +76,4 @@ In the Settings screen, enter your Arkadia backend URL (e.g. `https://arkadia-n2
 | `SYSTEM_ALERT_WINDOW` | Floating overlay |
 | `FOREGROUND_SERVICE` | Background playback |
 | `POST_NOTIFICATIONS` | Playback notification (Android 13+) |
-| `INTERNET` | Neural voice via Arkadia backend (optional) |
+| `RECORD_AUDIO` | Voice enrollment samples |

@@ -1,6 +1,7 @@
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
+    alias(libs.plugins.ksp)
 }
 
 android {
@@ -36,6 +37,13 @@ android {
         buildConfig = true
     }
 
+    // Room's schema history is a tracked artifact, not an implicit one: a narration
+    // must stay attributable to the model that made it across app updates, and that
+    // requires the schema to be versioned in the repository.
+    ksp {
+        arg("room.schemaLocation", "$projectDir/schemas")
+    }
+
     testOptions {
         unitTests {
             isIncludeAndroidResources = true
@@ -67,6 +75,12 @@ dependencies {
     // MediaSessionCompat + MediaStyle notification
     implementation(libs.androidx.media)
 
+    // Local-first persistence. The library, the narrations, the voice profiles and
+    // the reading sessions all live here; there is no remote source.
+    implementation(libs.androidx.room.runtime)
+    implementation(libs.androidx.room.ktx)
+    ksp(libs.androidx.room.compiler)
+
     // Unit tests run on the JVM. The engine's logic is exercised through the
     // AudioPlayer / OfflineVoice / TtsTransport seams, so no Android framework
     // or Robolectric is required.
@@ -78,6 +92,9 @@ dependencies {
     // the only way to test a Service is to have a device.
     testImplementation(libs.robolectric)
     testImplementation(libs.androidx.test.ext.junit)
+    // Room's own testing artifact, so the persistence invariants are exercised
+    // against a real in-memory SQLite database rather than a fake.
+    testImplementation(libs.androidx.room.testing)
 
     // Instrumented tests run on a device/emulator. They are the only surface that
     // can exercise the real platform TextToSpeech engine and the real OkHttp
