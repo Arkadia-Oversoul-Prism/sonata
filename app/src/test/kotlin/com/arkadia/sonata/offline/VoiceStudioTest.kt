@@ -242,7 +242,7 @@ class VoiceStudioTest {
         assertFalse(AdapterValidation.shouldActivate(0.20f, 0.18f))
     }
 
-    // ── The thermal watchdog ───────────────────────────────────────────────────────────
+    // ── The thermal watchdog ─────────────────────────────────────────────────
 
     @Test
     fun `the watchdog pauses above the threshold`() {
