@@ -37,8 +37,8 @@ Phase 2 does not need new persistence. The Phase 1 schema already carries:
 | Deletion independence | `Narration.documentId` nullable, `ON DELETE SET NULL` |
 
 The one thing Phase 1 deliberately left to the caller is the **file/record
-pairing**: `SonataRepository.deleteNarration` removes the record and documents
-that the caller must remove the file. Phase 2 must make that pairing impossible to get
+pairing**: `SonataRepository.deleteNarration` removes the record and documents that
+the caller must remove the file. Phase 2 must make that pairing impossible to get
 wrong — see §5.
 
 ## 3. Format strategy (offline only)
