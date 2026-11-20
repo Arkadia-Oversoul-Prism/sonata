@@ -19,7 +19,9 @@ class AndroidDeviceCapabilityProbe(context: Context) {
     fun detect(): DeviceCapabilities {
         val activityManager =
             appContext.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
-        val memoryInfo = ActivityManager.MemoryInfo().also(activityManager::getMemoryInfo)
+        val memoryInfo = ActivityManager.MemoryInfo().apply {
+            activityManager.getMemoryInfo(this)
+        }
         val storage = StatFs(appContext.filesDir.absolutePath)
         val packageManager = appContext.packageManager
         val powerManager =
