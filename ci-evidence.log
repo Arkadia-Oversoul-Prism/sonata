@@ -1,58 +1,60 @@
 === CI EVIDENCE ===
-commit_sha=1177197f5c047b5f0ca5d43bb00a2d7f40821ed1
-short_sha=1177197
-tree_sha=b095c2a340524599284845623166b24e6b4ae92a
+commit_sha=7d2a30139811c951bfc529fa2ea770f02601231b
+short_sha=7d2a301
+tree_sha=0863553d25c8f4e22413086517772ba152c95cb0
 branch=integration/stage7b-prod-candidate
-dirty_files=1
-date_utc=2026-11-20T06:57:17Z
+dirty_files=0
+date_utc=2026-11-20T12:07:52Z
+harness=ci/run-ci.sh (tracked in this tree)
+android_sdk=ABSENT - Gradle build, lint and device tests NOT RUN
 
-=== JOB 1: app core ===
 === TOOLCHAIN ===
 info: kotlinc-jvm 1.9.22 (JRE 17.0.21.1+2-1-deb12u1-Debian)
 openjdk version "17.0.21.1" 2026-11-17
 
+=== JOB 1: app core ===
 === SCOPE ===
 jvm_main_sources=38
 jvm_test_sources=8
 excluded_sources=38
-  EXCLUDED  app/src/main/kotlin/com/arkadia/sonata/AndroidAudioPlayer.kt
-  EXCLUDED  app/src/main/kotlin/com/arkadia/sonata/AndroidOfflineVoice.kt
-  EXCLUDED  app/src/main/kotlin/com/arkadia/sonata/BackendConfig.kt
-  EXCLUDED  app/src/main/kotlin/com/arkadia/sonata/FloatingOverlayService.kt
-  EXCLUDED  app/src/main/kotlin/com/arkadia/sonata/MainActivity.kt
-  EXCLUDED  app/src/main/kotlin/com/arkadia/sonata/Prefs.kt
-  EXCLUDED  app/src/main/kotlin/com/arkadia/sonata/ProcessTextActivity.kt
-  EXCLUDED  app/src/main/kotlin/com/arkadia/sonata/SonataApp.kt
-  EXCLUDED  app/src/main/kotlin/com/arkadia/sonata/SpeechCommand.kt
-  EXCLUDED  app/src/main/kotlin/com/arkadia/sonata/SpeechService.kt
-  EXCLUDED  app/src/main/kotlin/com/arkadia/sonata/TtsEngine.kt
-  EXCLUDED  app/src/main/kotlin/com/arkadia/sonata/TtsSettings.kt
-  EXCLUDED  app/src/main/kotlin/com/arkadia/sonata/data/RepositoryStore.kt
-  EXCLUDED  app/src/main/kotlin/com/arkadia/sonata/data/SonataDatabase.kt
-  EXCLUDED  app/src/main/kotlin/com/arkadia/sonata/data/SonataRepository.kt
-  EXCLUDED  app/src/main/kotlin/com/arkadia/sonata/data/SonataStore.kt
-  EXCLUDED  app/src/main/kotlin/com/arkadia/sonata/engine/OfflineEngine.kt
-  EXCLUDED  app/src/main/kotlin/com/arkadia/sonata/export/AppPrivateFileStore.kt
-  EXCLUDED  app/src/main/kotlin/com/arkadia/sonata/export/LibraryFileCoordinator.kt
-  EXCLUDED  app/src/main/kotlin/com/arkadia/sonata/reliability/DeviceValidationHarness.kt
-  EXCLUDED  app/src/main/kotlin/com/arkadia/sonata/reliability/MediaStoreAudioExporter.kt
-  EXCLUDED  app/src/main/kotlin/com/arkadia/sonata/reliability/StorageAccountant.kt
-  EXCLUDED  app/src/main/kotlin/com/arkadia/sonata/voice/VoiceStudio.kt
-  EXCLUDED  app/src/test/kotlin/com/arkadia/sonata/BackendConfigTest.kt
-  EXCLUDED  app/src/test/kotlin/com/arkadia/sonata/Fakes.kt
-  EXCLUDED  app/src/test/kotlin/com/arkadia/sonata/FloatingOverlayServiceTest.kt
-  EXCLUDED  app/src/test/kotlin/com/arkadia/sonata/ProcessTextHandoffTest.kt
-  EXCLUDED  app/src/test/kotlin/com/arkadia/sonata/SpeechCommandTest.kt
-  EXCLUDED  app/src/test/kotlin/com/arkadia/sonata/TtsEngineOfflineTest.kt
-  EXCLUDED  app/src/test/kotlin/com/arkadia/sonata/TtsEngineOnlineTest.kt
-  EXCLUDED  app/src/test/kotlin/com/arkadia/sonata/VoicePreviewTest.kt
-  EXCLUDED  app/src/test/kotlin/com/arkadia/sonata/data/SonataRepositoryTest.kt
-  EXCLUDED  app/src/test/kotlin/com/arkadia/sonata/offline/EngineTest.kt
-  EXCLUDED  app/src/test/kotlin/com/arkadia/sonata/offline/ExportTest.kt
-  EXCLUDED  app/src/test/kotlin/com/arkadia/sonata/offline/FakeSonataStore.kt
-  EXCLUDED  app/src/test/kotlin/com/arkadia/sonata/offline/FakeSpeechModel.kt
-  EXCLUDED  app/src/test/kotlin/com/arkadia/sonata/offline/ReliabilityTest.kt
-  EXCLUDED  app/src/test/kotlin/com/arkadia/sonata/offline/VoiceStudioTest.kt
+  EXCLUDED app/src/main/kotlin/com/arkadia/sonata/AndroidAudioPlayer.kt
+  EXCLUDED app/src/main/kotlin/com/arkadia/sonata/AndroidOfflineVoice.kt
+  EXCLUDED app/src/main/kotlin/com/arkadia/sonata/BackendConfig.kt
+  EXCLUDED app/src/main/kotlin/com/arkadia/sonata/FloatingOverlayService.kt
+  EXCLUDED app/src/main/kotlin/com/arkadia/sonata/MainActivity.kt
+  EXCLUDED app/src/main/kotlin/com/arkadia/sonata/Prefs.kt
+  EXCLUDED app/src/main/kotlin/com/arkadia/sonata/ProcessTextActivity.kt
+  EXCLUDED app/src/main/kotlin/com/arkadia/sonata/SonataApp.kt
+  EXCLUDED app/src/main/kotlin/com/arkadia/sonata/SpeechCommand.kt
+  EXCLUDED app/src/main/kotlin/com/arkadia/sonata/SpeechService.kt
+  EXCLUDED app/src/main/kotlin/com/arkadia/sonata/TtsEngine.kt
+  EXCLUDED app/src/main/kotlin/com/arkadia/sonata/TtsSettings.kt
+  EXCLUDED app/src/main/kotlin/com/arkadia/sonata/data/RepositoryStore.kt
+  EXCLUDED app/src/main/kotlin/com/arkadia/sonata/data/SonataDatabase.kt
+  EXCLUDED app/src/main/kotlin/com/arkadia/sonata/data/SonataRepository.kt
+  EXCLUDED app/src/main/kotlin/com/arkadia/sonata/data/SonataStore.kt
+  EXCLUDED app/src/main/kotlin/com/arkadia/sonata/engine/OfflineEngine.kt
+  EXCLUDED app/src/main/kotlin/com/arkadia/sonata/export/AppPrivateFileStore.kt
+  EXCLUDED app/src/main/kotlin/com/arkadia/sonata/export/LibraryFileCoordinator.kt
+  EXCLUDED app/src/main/kotlin/com/arkadia/sonata/reliability/DeviceValidationHarness.kt
+  EXCLUDED app/src/main/kotlin/com/arkadia/sonata/reliability/MediaStoreAudioExporter.kt
+  EXCLUDED app/src/main/kotlin/com/arkadia/sonata/reliability/StorageAccountant.kt
+  EXCLUDED app/src/main/kotlin/com/arkadia/sonata/voice/VoiceStudio.kt
+  EXCLUDED app/src/test/kotlin/com/arkadia/sonata/BackendConfigTest.kt
+  EXCLUDED app/src/test/kotlin/com/arkadia/sonata/Fakes.kt
+  EXCLUDED app/src/test/kotlin/com/arkadia/sonata/FloatingOverlayServiceTest.kt
+  EXCLUDED app/src/test/kotlin/com/arkadia/sonata/ProcessTextHandoffTest.kt
+  EXCLUDED app/src/test/kotlin/com/arkadia/sonata/SpeechCommandTest.kt
+  EXCLUDED app/src/test/kotlin/com/arkadia/sonata/TtsEngineOfflineTest.kt
+  EXCLUDED app/src/test/kotlin/com/arkadia/sonata/TtsEngineOnlineTest.kt
+  EXCLUDED app/src/test/kotlin/com/arkadia/sonata/VoicePreviewTest.kt
+  EXCLUDED app/src/test/kotlin/com/arkadia/sonata/data/SonataRepositoryTest.kt
+  EXCLUDED app/src/test/kotlin/com/arkadia/sonata/offline/EngineTest.kt
+  EXCLUDED app/src/test/kotlin/com/arkadia/sonata/offline/ExportTest.kt
+  EXCLUDED app/src/test/kotlin/com/arkadia/sonata/offline/FakeSonataStore.kt
+  EXCLUDED app/src/test/kotlin/com/arkadia/sonata/offline/FakeSpeechModel.kt
+  EXCLUDED app/src/test/kotlin/com/arkadia/sonata/offline/ReliabilityTest.kt
+  EXCLUDED app/src/test/kotlin/com/arkadia/sonata/offline/VoiceStudioTest.kt
 
 === COMPILE ===
 COMPILE_EXIT=0
@@ -68,9 +70,7 @@ test_classes=8
   CLASS com.arkadia.sonata.offline.NarrationIntelligenceTest
   CLASS com.arkadia.sonata.offline.ReadAlongTest
 JUnit version 4.13.2
-................................................................................................................
-Time: 0.387
-
+Time: 0.381
 OK (112 tests)
 
 TEST_EXIT=0
@@ -83,10 +83,14 @@ narration_core_test_sources=6
 COMPILE_EXIT=0
 test_classes=6
 JUnit version 4.13.2
-................................................................connectivityProbe: live=true elapsedMs=103
+................................................................connectivityProbe: live=true elapsedMs=186
 .........................................................................................................
-Time: 2.455
+Time: 2.302
 
 OK (169 tests)
 
+
 NARRATION_EXIT=0
+
+SUMMARY total_tests=281 job1_exit=0 job2_exit=0
+VERDICT=PASS
