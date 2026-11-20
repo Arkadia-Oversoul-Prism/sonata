@@ -1,10 +1,10 @@
 === CI EVIDENCE ===
-commit_sha=c6b7db5b355831d1da11c040f944349a465a9cf6
-short_sha=c6b7db5
-tree_sha=d9e23409964b077f17d61540a6df110c3ff65ff9
+commit_sha=1177197f5c047b5f0ca5d43bb00a2d7f40821ed1
+short_sha=1177197
+tree_sha=b095c2a340524599284845623166b24e6b4ae92a
 branch=integration/stage7b-prod-candidate
-dirty_files=2
-date_utc=2026-11-20T06:50:47Z
+dirty_files=1
+date_utc=2026-11-20T06:57:17Z
 
 === JOB 1: app core ===
 === TOOLCHAIN ===
@@ -69,7 +69,7 @@ test_classes=8
   CLASS com.arkadia.sonata.offline.ReadAlongTest
 JUnit version 4.13.2
 ................................................................................................................
-Time: 0.407
+Time: 0.387
 
 OK (112 tests)
 
@@ -83,9 +83,9 @@ narration_core_test_sources=6
 COMPILE_EXIT=0
 test_classes=6
 JUnit version 4.13.2
-................................................................connectivityProbe: live=true elapsedMs=196
+................................................................connectivityProbe: live=true elapsedMs=103
 .........................................................................................................
-Time: 2.701
+Time: 2.455
 
 OK (169 tests)
 
