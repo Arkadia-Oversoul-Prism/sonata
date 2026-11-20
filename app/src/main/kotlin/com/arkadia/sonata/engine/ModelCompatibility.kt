@@ -32,7 +32,8 @@ object ModelCompatibility {
     fun canLoad(descriptor: ModelDescriptor, device: DeviceProfile): Boolean {
         val ramNeeded = (descriptor.minRamBytes * RAM_HEADROOM).toLong()
         val storageNeeded = (descriptor.sizeBytes * STORAGE_HEADROOM).toLong()
-        return device.ramBytes >= ramNeeded && device.freeStorageBytes >= storageNeeded
+        return minOf(device.ramBytes, device.availableRamBytes) >= ramNeeded &&
+            device.freeStorageBytes >= storageNeeded
     }
 
     /**
@@ -51,7 +52,8 @@ object ModelCompatibility {
         if (!device.thermalValidated) return false
         val ramNeeded = ((base.minRamBytes + adapterBytes) * ADAPT_RAM_HEADROOM).toLong()
         val storageNeeded = ((base.sizeBytes + adapterBytes) * STORAGE_HEADROOM).toLong()
-        return device.ramBytes >= ramNeeded && device.freeStorageBytes >= storageNeeded
+        return minOf(device.ramBytes, device.availableRamBytes) >= ramNeeded &&
+            device.freeStorageBytes >= storageNeeded
     }
 
     /**
@@ -62,7 +64,8 @@ object ModelCompatibility {
 
     /** A user-presentable reason a model was refused, or null when it is allowed. */
     fun refusalReason(descriptor: ModelDescriptor, device: DeviceProfile): String? = when {
-        device.ramBytes < (descriptor.minRamBytes * RAM_HEADROOM).toLong() ->
+        minOf(device.ramBytes, device.availableRamBytes) <
+            (descriptor.minRamBytes * RAM_HEADROOM).toLong() ->
             "This device does not have enough memory for ${descriptor.id}"
 
         device.freeStorageBytes < (descriptor.sizeBytes * STORAGE_HEADROOM).toLong() ->
