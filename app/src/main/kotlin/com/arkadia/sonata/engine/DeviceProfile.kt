@@ -3,11 +3,10 @@ package com.arkadia.sonata.engine
 /**
  * What the device can hold and do.
  *
- * Recorded rather than probed at the point of use, so the compatibility decision
- * is a pure function of two values and is testable without a device. The
- * specification forbids advertising on-device training before it is measured
- * against RAM, storage, thermal limits and speed; this is the value those
- * measurements land in.
+ * A point-in-time capability snapshot. The Android probe builds this value
+ * automatically; compatibility decisions remain pure functions and are testable
+ * without a device. Sustained thermal validation is tracked separately and is
+ * never inferred from a single platform reading.
  */
 data class DeviceProfile(
     /** Total RAM in bytes. */
