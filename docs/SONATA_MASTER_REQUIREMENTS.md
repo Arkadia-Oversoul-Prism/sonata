@@ -1,7 +1,7 @@
 # SONATA_MASTER_REQUIREMENTS
 
 **Status:** Stage 7b production candidate
-**Candidate commit:** `3d860c6fe8d88396d537f202b7d3bb7947b5c59f`
+**Candidate commit:** `a102db4f01b04f95214216c3118545d4030cbb02`
 **Branch:** `integration/stage7b-prod-candidate`
 **Date:** 2026-11-20
 **Supersedes:** the requirement statements scattered across E5–E11 (preserved unchanged as historical evidence)
@@ -153,7 +153,7 @@ computed from.
 
 | # | Criterion | Met? |
 |---|---|---|
-| A1 | Integration tree exists at a named commit | **Yes** — `3d860c6` |
+| A1 | Integration tree exists at a named commit | **Yes** — `a102db4` |
 | A2 | CI runs against that exact commit | **Yes** — `ci-evidence.log`, SHA recorded |
 | A3 | All executable tests pass | **Yes** — 112 + 169 |
 | A4 | Privacy policy verified against the real manifest | **Yes** — and it found a real violation, now fixed |

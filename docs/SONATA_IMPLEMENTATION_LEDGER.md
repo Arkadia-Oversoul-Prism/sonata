@@ -1,7 +1,7 @@
 # SONATA_IMPLEMENTATION_LEDGER
 
 **Status:** Stage 7b production candidate
-**Candidate commit:** `3d860c6fe8d88396d537f202b7d3bb7947b5c59f`
+**Candidate commit:** `a102db4f01b04f95214216c3118545d4030cbb02`
 **Date:** 2026-11-20
 
 The ledger records what was built, when, at which commit, and what evidence exists
@@ -101,7 +101,7 @@ point the decision was made.
 |---|---|
 | Branch | `integration/stage7b-prod-candidate` |
 | Merge commit | `07c68fe` — offline branch merged into S0 baseline |
-| Candidate commit | `3d860c6fe8d88396d537f202b7d3bb7947b5c59f` |
+| Candidate commit | `a102db4f01b04f95214216c3118545d4030cbb02` |
 | Files in tree | 184 tracked |
 | App sources | 88 Kotlin files |
 | Narration-core sources | 21 Kotlin files |
@@ -197,10 +197,10 @@ This is recorded as a fact, not a defect to be hidden. It is the root cause of B
 
 | Evidence | Location | Bound to |
 |---|---|---|
-| CI harness | `ci/run-ci.sh`, `ci/scope.py` | `3d860c6` |
-| CI run log | `ci-evidence.log` | `3d860c6` (line 2) |
-| App-core test result | `ci-evidence.log`, job 1 section | `3d860c6` |
-| Narration-core test result | `ci-evidence.log`, job 2 section | `3d860c6` |
+| CI harness | `ci/run-ci.sh`, `ci/scope.py` | `a102db4` |
+| CI run log | `ci-evidence.log` | `a102db4` (line 2) |
+| App-core test result | `ci-evidence.log`, job 1 section | `a102db4` |
+| Narration-core test result | `ci-evidence.log`, job 2 section | `a102db4` |
 | Stage 7a review | `webpages/sonata-stage7a-review/index.html` | pre-merge tree |
 | Historical record | `docs/evolution/E0..E11` | as written |
-| Reproducible build info | `docs/SONATA_PRODUCTION_HANDOFF.md` §4 | `3d860c6` |
+| Reproducible build info | `docs/SONATA_PRODUCTION_HANDOFF.md` §4 | `a102db4` |
