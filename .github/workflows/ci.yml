@@ -1,0 +1,123 @@
+name: Sonata CI
+
+# Runs on every push and pull request. The evidence this produces is what the
+# production-review package cites: the workflow run is bound to a commit SHA, and
+# the SHA is what the PR body names. A green badge without a SHA is not evidence.
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  jvm-verification:
+    name: JVM verification (app core + narration core)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Install pinned Kotlin compiler
+        run: |
+          set -euo pipefail
+          curl -sSL -o /tmp/kotlin.zip \
+            https://github.com/JetBrains/kotlin/releases/download/v1.9.22/kotlin-compiler-1.9.22.zip
+          unzip -q /tmp/kotlin.zip -d "$HOME/.local"
+          echo "$HOME/.local/kotlinc/bin" >> "$GITHUB_PATH"
+
+      - name: Fetch pinned test dependencies
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/.sonata-lib"
+          cd "$HOME/.sonata-lib"
+          base=https://repo1.maven.org/maven2
+          google=https://dl.google.com/dl/android/maven2
+          curl -sSLO $base/junit/junit/4.13.2/junit-4.13.2.jar
+          curl -sSLO $base/org/hamcrest/hamcrest-core/1.3/hamcrest-core-1.3.jar
+          curl -sSLO $base/org/jetbrains/kotlinx/kotlinx-coroutines-core-jvm/1.7.3/kotlinx-coroutines-core-jvm-1.7.3.jar
+          curl -sSLO $base/org/jetbrains/kotlinx/kotlinx-coroutines-test-jvm/1.7.3/kotlinx-coroutines-test-jvm-1.7.3.jar
+          curl -sSLO $base/com/squareup/okhttp3/okhttp/4.12.0/okhttp-4.12.0.jar
+          curl -sSLO $base/com/squareup/okio/okio-jvm/3.6.0/okio-jvm-3.6.0.jar
+          curl -sSLO $base/org/json/json/20240303/json-20240303.jar
+          curl -sSLO $google/androidx/room/room-common/2.6.1/room-common-2.6.1.jar
+          curl -sSLO $google/androidx/annotation/annotation-jvm/1.7.1/annotation-jvm-1.7.1.jar
+          ls -la
+
+      - name: App core — JVM verification
+        env:
+          LIB: ${{ github.workspace }}/../.sonata-lib
+        run: |
+          set -euo pipefail
+          export LIB="$HOME/.sonata-lib"
+          export STD="$(dirname "$(command -v kotlinc)")/../lib"
+          ./build/jvm-verify.sh | tee app-core.log
+
+      - name: Narration core — full suite
+        run: |
+          set -euo pipefail
+          export LIB="$HOME/.sonata-lib"
+          export STD="$(dirname "$(command -v kotlinc)")/../lib"
+          ./narration-core/build.sh | tee narration-core.log
+
+      - name: Record the commit under test
+        if: always()
+        run: |
+          echo "commit_sha=$(git rev-parse HEAD)" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "short_sha=$(git rev-parse --short HEAD)" | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sonata-ci-evidence-${{ github.sha }}
+          path: |
+            app-core.log
+            narration-core.log
+            build/junit.log
+          retention-days: 90
+
+  android-build:
+    name: Android build (APK/AAB)
+    runs-on: ubuntu-latest
+    # This job is the one that produces the shippable artifact. It is defined so
+    # the pipeline is complete and so a reviewer can see exactly what would run,
+    # but it is EXPECTED TO FAIL until the Android SDK/AGP toolchain is available
+    # in the build environment. It is not marked continue-on-error: a red job is
+    # the honest signal. See SONATA_PRODUCTION_HANDOFF.md.
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+      - name: Assemble
+        run: |
+          set -euo pipefail
+          if [ ! -x ./gradlew ]; then
+            echo "::error::No Gradle wrapper in the repository. The Android build cannot run."
+            exit 1
+          fi
+          ./gradlew --no-daemon assembleRelease bundleRelease
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sonata-android-${{ github.sha }}
+          path: |
+            app/build/outputs/apk/**/*.apk
+            app/build/outputs/bundle/**/*.aab
+          if-no-files-found: warn
+          retention-days: 90

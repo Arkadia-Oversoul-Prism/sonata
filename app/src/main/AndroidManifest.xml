@@ -13,11 +13,25 @@
     <!-- Requested at runtime on API 33+; without it the playback notification —
          and therefore every transport control — is invisible. -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
-    <uses-permission android:name="android.permission.INTERNET" />
+    <!-- INTERNET is deliberately NOT declared.
+
+         Sonata is an offline reader. The committed privacy policy
+         (ai.sonata.privacy.ManifestAudit) requires that the app cannot reach the
+         network, and regression test R11 fails the build if this permission comes
+         back. Stage 7a found the permission still present: the online tier had
+         never actually been removed. Removing it is what makes the offline
+         guarantee checkable rather than asserted.
+
+         Consequence, recorded rather than hidden: OkHttpTtsTransport is no longer
+         reachable in the shipped app, because any socket it opens would fail. See
+         SONATA_KNOWN_LIMITATIONS.md. -->
 
     <application
         android:name=".SonataApp"
-        android:allowBackup="true"
+        android:allowBackup="false"
+        android:fullBackupContent="false"
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        android:usesCleartextTraffic="false"
         android:icon="@drawable/ic_sonata"
         android:label="@string/app_name"
         android:roundIcon="@drawable/ic_sonata"
