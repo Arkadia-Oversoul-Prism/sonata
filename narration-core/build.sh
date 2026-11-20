@@ -8,6 +8,11 @@
 # Exit code is the JUnit exit code, so a failing test fails the build.
 set -euo pipefail
 
+# Run from the module directory regardless of where the caller is, so the source
+# globs below always resolve. Without this the script silently compiles nothing
+# and kotlinc drops into an interactive REPL, which looks like a hang.
+cd "$(dirname "$0")"
+
 KOTLINC=${KOTLINC:-kotlinc}
 LIB=${LIB:-/opt/tools/lib}
 STD=${STD:-$(dirname "$(command -v "$KOTLINC")")/../lib}
