@@ -54,6 +54,32 @@ because a privacy report that only lists what is now correct is not a report.
 | `android:dataExtractionRules` | `@xml/data_extraction_rules` | `BACKUP_RULES_EXCLUDE_PRIVATE_DATA` |
 | `android:usesCleartextTraffic` | `false` | `NO_CLEARTEXT` |
 
+### The debug overlay, and why it is not a loophole
+
+`app/src/debug/AndroidManifest.xml` declares `android.permission.INTERNET`. This
+is deliberate and it does not weaken the promise, but it needs stating plainly
+rather than being discovered by a reviewer.
+
+**Why it exists.** Android gates *every* socket on `INTERNET`, including a
+loopback connection to `127.0.0.1`. The two MockWebServer device suites
+(`DeviceProgressiveReadProtocolTest`, `DeviceTransportProtocolTest`) start a local
+server and drive the real OkHttp stack against it. With `INTERNET` removed from
+the main manifest, those suites failed in `setUp` — 17 tests, all with
+`lateinit property transport has not been initialized`, because the socket could
+not be opened. The failure had nothing to do with the behaviour under test.
+
+**Why it is safe.**
+
+| Fact | How it is enforced |
+|---|---|
+| The permission is **not** in the release APK | It is declared in the `debug` source set only; `app/src/main/AndroidManifest.xml` has no `INTERNET` |
+| `R11` still guards the shipped manifest | It reads `app/src/main/AndroidManifest.xml` and fails the build if `INTERNET` appears there |
+| The release build is what ships | `assembleRelease` / `bundleRelease` do not merge the `debug` source set |
+
+**What a reviewer should check.** Unzip the release APK and confirm the manifest
+declares no `INTERNET`. That is the artifact that matters; the debug overlay is
+test scaffolding.
+
 ### Permissions that remain, and why
 
 | Permission | Why it is needed |

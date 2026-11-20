@@ -14,10 +14,30 @@
 |---|---|---|---|---|
 | App core (JVM) | 38 main + 8 test sources | **112** | **0** | 0 |
 | Narration core | 15 main + 6 test sources | **169** | **0** | 0 |
-| **Total** | | **281** | **0** | **0** |
+| **JVM total** | | **281** | **0** | **0** |
+| Android unit tests (`testDebugUnitTest`) | full app, on a GitHub runner | ✅ | **0** | 0 |
+| Android lint (`lintDebug`) | full app | ✅ | **0** | 0 |
+| Instrumented tests (`connectedDebugAndroidTest`) | API 34 emulator | ✅ | **0** | 0 |
 
-Both jobs ran against the exact candidate commit. The commit SHA is the first line
-of `ci-evidence.log`, so the evidence cannot be detached from the tree it describes.
+Both JVM jobs ran against the exact candidate commit. The commit SHA is the first
+line of `ci-evidence.log`, so the evidence cannot be detached from the tree it
+describes.
+
+The three Android rows are **new in this revision**. Earlier drafts said the
+Android pipeline could not run; that was true of the preparing sandbox and wrong
+about the project. `.github/workflows/build-apk.yml` runs it on a GitHub runner
+and it passes.
+
+### The instrumented suite found a real defect
+
+The first instrumented run failed 17 tests with
+`lateinit property transport has not been initialized`. The cause was the privacy
+fix: removing `INTERNET` from the main manifest also blocks a loopback socket, so
+the MockWebServer suites could not start. The permission now lives in
+`app/src/debug/AndroidManifest.xml` only. See `SONATA_PRIVACY_AND_SECURITY.md`.
+
+No JVM test could have found this. It is the strongest argument in this report for
+running the real Android pipeline rather than reasoning about it.
 
 ---
 

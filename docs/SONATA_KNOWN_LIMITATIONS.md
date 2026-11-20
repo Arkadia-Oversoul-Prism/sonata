@@ -23,16 +23,26 @@ not a risk or a degradation; it is the absence of the product.
 **What it would take.** Bundle a model, implement the JNI bridge, implement
 `SpeechModel`, validate on a device.
 
-### L2 — No APK or AAB can be produced here **BLOCKER**
+### L2 — No **signed** APK or AAB **BLOCKER for release**
 
-The build environment has no Android SDK. `./gradlew assembleRelease` cannot run.
+**Corrected.** An earlier draft said no APK could be produced at all. That was
+wrong: `.github/workflows/build-apk.yml` builds on a GitHub runner with a full
+SDK, and it has produced both artifacts for this candidate.
 
-**Consequence.** There is no installable artifact. The candidate is source only.
+| Artifact | Status |
+|---|---|
+| Release APK (unsigned) | ✅ built, 1.5 MB |
+| Release AAB (unsigned) | ✅ built |
+| Debug APK (installable) | ✅ built, 5.8 MB |
 
-**What it would take.** An environment with the Android SDK and AGP, or CI with
-`android-actions/setup-android` (the workflow is written and will run there).
+**Consequence.** The packages exist and can be inspected and installed (debug).
+They are **unsigned**, so they cannot be published. Signing needs a keystore,
+which is a release-authority decision, not a build decision.
 
-### L3 — No device validation **BLOCKER**
+**What it would take.** A keystore and a `signingConfig`, supplied by whoever
+holds release authority. Nothing in the code blocks it.
+
+### L3 — No **physical** device validation **BLOCKER**
 
 Gates G1–G6 and measurements S0-1..S0-4 are unexecuted. See
 `SONATA_DEVICE_VALIDATION.md`.

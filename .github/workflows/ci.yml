@@ -80,38 +80,14 @@ jobs:
             ci-run.log
           retention-days: 90
 
-  android-build:
-    name: Android build (APK/AAB)
-    runs-on: ubuntu-latest
-    # This job is the one that produces the shippable artifact. It is defined so
-    # the pipeline is complete and so a reviewer can see exactly what would run,
-    # but it is EXPECTED TO FAIL until the Android SDK/AGP toolchain is available
-    # in the build environment. It is not marked continue-on-error: a red job is
-    # the honest signal. See SONATA_PRODUCTION_HANDOFF.md.
-    steps:
-      - uses: actions/checkout@v4
-      - name: Set up JDK 17
-        uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: "17"
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
-      - name: Assemble
-        run: |
-          set -euo pipefail
-          if [ ! -x ./gradlew ]; then
-            echo "::error::No Gradle wrapper in the repository. The Android build cannot run."
-            exit 1
-          fi
-          ./gradlew --no-daemon assembleRelease bundleRelease
-      - name: Upload artifacts
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: sonata-android-${{ github.sha }}
-          path: |
-            app/build/outputs/apk/**/*.apk
-            app/build/outputs/bundle/**/*.aab
-          if-no-files-found: warn
-          retention-days: 90
+  # The Android build lives in .github/workflows/build-apk.yml, which runs the
+  # unit suite, lint, assembleRelease, assembleDebug and the API-34 instrumented
+  # suite. It is a separate workflow because it needs the Android SDK and an
+  # emulator, and because a failure there must be a distinct signal from the
+  # JVM verification above.
+  #
+  # A duplicate android-build job used to live here. It called
+  # android-actions/setup-android@v3, which fails on current runners with
+  # "Failed to find package 'tools'" — the package was removed from the SDK
+  # repository. It never built anything; it only produced a red X. Removed
+  # rather than left as decoration.

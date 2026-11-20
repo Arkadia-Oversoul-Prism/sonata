@@ -8,7 +8,7 @@
 
 ## 1. Headline
 
-**No device validation has been performed. Not one gate has been executed.**
+**No physical-device validation has been performed. Not one gate has been executed.**
 
 This document exists to state that precisely, to define what would have to be run,
 and to make the gap impossible to overlook. It is not a report of results.
@@ -22,21 +22,44 @@ and to make the gap impossible to overlook. It is not a report of results.
 | G5 | Floating overlay survives backgrounding | **No** | — |
 | G6 | Export produces a playable file | **No** | — |
 
+### What *has* run: the instrumented suite on an API-34 emulator
+
+This is not a substitute for the gates above, and it is not presented as one. It is
+a real result and it belongs in this document rather than being buried.
+
+`connectedDebugAndroidTest` runs on a GitHub runner against an API-34 emulator and
+**passes**. It exercises the platform `TextToSpeech` readiness path, real audio
+decoding and real cache-directory semantics — things Robolectric structurally
+cannot cover.
+
+| What the emulator proves | What it does not prove |
+|---|---|
+| The app installs and the instrumentation starts | Launch latency on real hardware |
+| Services construct without throwing | Overlay behaviour under a real window manager |
+| The transport protocol holds over real sockets | Real audio output through a speaker |
+| Cache and file semantics behave | Thermal throttling, battery, memory pressure |
+
+**G3 remains unanswerable regardless of device**, because there is no model and no
+inference runtime (ADR-010). An emulator cannot fix that.
+
 ---
 
-## 2. Why nothing was executed
+## 2. Why the physical gates were not executed
 
-Three independent blockers, any one of which is sufficient:
+Two blockers remain, either of which is sufficient:
 
-1. **No Android SDK in the build environment.** No APK can be produced, so there is
-   nothing to install.
-2. **No physical device.** The gates are defined on hardware; an emulator would not
+1. **No physical device.** The gates are defined on hardware; an emulator does not
    answer the questions G3 and G5 ask (real audio output, real window manager).
-3. **No speech engine.** Even with a device and an APK, G3 would fail: there is no
+2. **No speech engine.** Even with a device and an APK, G3 would fail: there is no
    model and no inference runtime (ADR-010).
 
-The third is the substantive one. G1, G2, G4 and G6 could in principle be exercised
+The second is the substantive one. G1, G2, G4 and G6 could in principle be exercised
 on a device with a stub engine. G3 cannot, because the capability does not exist.
+
+> **Correction.** An earlier draft listed "no Android SDK, so no APK can be
+> produced" as the first blocker. That was wrong: the APK is built on GitHub
+> Actions and a debug APK is available as an artifact. The blocker is the absence
+> of a *device*, not of a *build*.
 
 ---
 

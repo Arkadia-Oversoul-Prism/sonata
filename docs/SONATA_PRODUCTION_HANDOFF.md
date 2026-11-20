@@ -63,17 +63,46 @@ This is not a failed stage. Substantial, verifiable work was done:
 | A4 | Privacy verified against the real manifest | `R11` — and it found a violation, now fixed |
 | A5 | No placeholder presented as production | Neural tier reclassified unsupported |
 | A6 | Documentation matches implementation | This document set |
+| A7 | APK/AAB built | **Built on GitHub Actions** — see §2.3. Unsigned (no keystore) |
+| A8 | Instrumented device suite | **Passes on an API-34 emulator** — see §2.3. Not a physical device |
 
 ### 2.2 What is not met
 
 | # | Criterion | Why |
 |---|---|---|
-| A7 | APK/AAB built and signed | No Android SDK in this environment |
-| A8 | Device gates G1–G6 | No physical device |
-| A9 | Performance S0-1..S0-4 | No device |
+| A7b | APK/AAB **signed** | No keystore. Signing is a release-authority decision |
+| A8b | Device gates G1–G6 on a **physical** device | No physical device; emulator is not a substitute for thermal/audio/battery behaviour |
+| A9 | Performance S0-1..S0-4 | Needs a physical device |
 | A10 | Model binaries with checksums | **No models exist** |
 
-A10 is the one that forces the verdict. A7–A9 are external. A10 is not.
+A10 is the one that forces the verdict. A7b–A9 are external. A10 is not.
+
+### 2.3 Real CI evidence (GitHub Actions)
+
+Earlier drafts of this document said the Android build could not run because the
+preparing environment had no SDK. That was true of the sandbox and **wrong about
+the project**: `.github/workflows/build-apk.yml` builds on a GitHub runner with a
+full SDK. It was run for this candidate and it passes.
+
+| Workflow | Job | Result |
+|---|---|---|
+| Build Sonata APK | Build Release APK | ✅ unit tests, lint, `assembleRelease`, `bundleRelease`, `assembleDebug`, compile androidTest |
+| Build Sonata APK | Instrumented tests (API 34 emulator) | ✅ `connectedDebugAndroidTest` |
+| Sonata CI | JVM verification | ✅ 281 tests |
+
+Artifacts produced for the candidate SHA: `Sonata-release-<sha>` (release APK,
+1.5 MB), `Sonata-debug-installable-<sha>` (debug APK, 5.8 MB, installable),
+`Sonata-unit-test-reports-<sha>`, `Sonata-instrumented-test-reports-<sha>`.
+
+**This is what found the last real defect.** The first instrumented run failed 17
+tests with `lateinit property transport has not been initialized`. The cause was
+the privacy fix itself: removing `INTERNET` from the main manifest also blocks a
+loopback socket, so the MockWebServer suites could not start. The permission now
+lives in `app/src/debug/AndroidManifest.xml` only — the release APK still declares
+no `INTERNET`, and `R11` still fails the build if it appears in the main manifest.
+
+No JVM test could have found this. It is the concrete argument for running the
+real Android pipeline rather than reasoning about it.
 
 ---
 
