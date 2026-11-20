@@ -46,9 +46,9 @@ data class DeviceCapabilities(
     val supportsArm64: Boolean
         get() = supportedAbis.any { it.equals("arm64-v8a", ignoreCase = true) }
 
-    /** Current memory pressure is a runtime observation, not a capability tier. */
-    val isLowMemory: Boolean
-        get() = availableRamBytes <= 0L
+    /** True only when Android reports no available RAM; not a performance tier. */
+    val hasNoAvailableRam: Boolean
+        get() = availableRamBytes == 0L
 }
 
 /** Pure mapping from platform facts to Sonata's compatibility profile. */
@@ -82,6 +82,7 @@ object DeviceCapabilityDetector {
                     .filter { it.isNotBlank() }
                     .joinToString(" ")
                     .ifBlank { "unknown" },
+                availableRamBytes = availableRam,
             ),
         )
     }
