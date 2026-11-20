@@ -18,6 +18,8 @@ data class DeviceProfile(
     val thermalValidated: Boolean,
     /** A human label, e.g. "mid-tier". Used in reports, never in logic. */
     val label: String = "unknown",
+    /** Currently available RAM in bytes; defaults to total RAM for legacy callers. */
+    val availableRamBytes: Long = ramBytes,
 ) {
     companion object {
         /**
