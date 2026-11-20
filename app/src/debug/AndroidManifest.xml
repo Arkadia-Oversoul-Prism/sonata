@@ -2,10 +2,32 @@
 <!--
   Debug-only manifest overlay.
 
-  Adds the debug network security config so instrumented tests can reach a local
-  http://localhost MockWebServer. The release manifest is untouched and keeps the
-  platform default (cleartext refused).
+  Two things the instrumented tests need that the shipped app must not have:
+
+  1. A network security config, so the tests can reach a local http://localhost
+     MockWebServer. The release manifest keeps the platform default (cleartext
+     refused).
+
+  2. android.permission.INTERNET.
+
+     This is not a relaxation of the privacy promise — it is a correction of a
+     wrong assumption. Android gates *every* socket on INTERNET, including a
+     loopback connection to 127.0.0.1. When Stage 7b removed INTERNET from the
+     main manifest (correctly: the shipped app must not reach the network), the
+     two MockWebServer device suites began failing in setUp with
+     "lateinit property transport has not been initialized", because
+     OkHttpTtsTransport could not open its socket. 17 tests failed for a reason
+     that had nothing to do with the behaviour they assert.
+
+     The permission is declared here, in the debug source set only. It is not in
+     app/src/main/AndroidManifest.xml, so it is not in the release APK, and
+     ManifestAudit / regression test R11 — which read the main manifest — still
+     fail the build if it ever appears there.
+
+     Verified: the release APK built from this tree declares no INTERNET
+     permission. See SONATA_PRIVACY_AND_SECURITY.md.
 -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-permission android:name="android.permission.INTERNET" />
     <application android:networkSecurityConfig="@xml/network_security_config" />
 </manifest>

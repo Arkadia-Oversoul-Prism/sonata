@@ -46,6 +46,13 @@ jobs:
       - name: Build Release APK (unsigned)
         run: ./gradlew assembleRelease --no-daemon
 
+      # The AAB is the Play Store artifact. It is built here so the production
+      # package exists as a real, inspectable file rather than a claim. It is
+      # unsigned for the same reason as the APK: signing needs a keystore, which
+      # is a release-authority decision, not a build decision.
+      - name: Build Release AAB (unsigned)
+        run: ./gradlew bundleRelease --no-daemon
+
       # The device suites need an emulator and are not run here; compile them so
       # the instrumented sources cannot silently rot.
       - name: Compile instrumented tests
@@ -59,7 +66,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: Sonata-release-${{ github.sha }}
-          path: app/build/outputs/apk/release/*.apk
+          path: |
+            app/build/outputs/apk/release/*.apk
+            app/build/outputs/bundle/release/*.aab
           retention-days: 30
 
       # The debug APK is signed with the Android Debug key and therefore *is*
