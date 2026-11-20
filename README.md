@@ -115,7 +115,7 @@ app/                     Android application (Activities, Services, Room, MediaS
 narration-core/          Pure-JVM module: narration, privacy, reliability, validation
 docs/evolution/          E0–E11, the historical record (preserved, not edited)
 docs/SONATA_*.md         The current authoritative documentation set
-build/                   JVM verification harness (scope.py, jvm-verify.sh)
+ci/                      CI harness: run-ci.sh + scope.py (tracked, reproducible)
 ```
 
 `narration-core` has no Android dependency, so its 169 tests run anywhere,
@@ -134,8 +134,7 @@ export LIB=/path/to/jars        # see docs/SONATA_PRODUCTION_HANDOFF.md §4.2
 export STD=/path/to/kotlinc/lib
 export KOTLINC=/path/to/kotlinc
 
-./build/jvm-verify.sh           # app core:  expect OK (112 tests)
-./narration-core/build.sh       # narration:  expect OK (169 tests)
+./ci/run-ci.sh                  # all jobs:  expect 281 tests, VERDICT=PASS
 ```
 
 ### Android build (requires the SDK)

@@ -53,21 +53,16 @@ jobs:
           curl -sSLO $google/androidx/annotation/annotation-jvm/1.7.1/annotation-jvm-1.7.1.jar
           ls -la
 
-      - name: App core — JVM verification
-        env:
-          LIB: ${{ github.workspace }}/../.sonata-lib
+      - name: JVM verification (app core + narration core)
         run: |
           set -euo pipefail
           export LIB="$HOME/.sonata-lib"
           export STD="$(dirname "$(command -v kotlinc)")/../lib"
-          ./build/jvm-verify.sh | tee app-core.log
-
-      - name: Narration core — full suite
-        run: |
-          set -euo pipefail
-          export LIB="$HOME/.sonata-lib"
-          export STD="$(dirname "$(command -v kotlinc)")/../lib"
-          ./narration-core/build.sh | tee narration-core.log
+          # One tracked entrypoint for both jobs. It writes ci-evidence.log with
+          # the commit and tree SHA it actually ran against.
+          ./ci/run-ci.sh | tee ci-run.log
+          echo "---- ci-evidence.log ----"
+          cat ci-evidence.log
 
       - name: Record the commit under test
         if: always()
@@ -81,9 +76,8 @@ jobs:
         with:
           name: sonata-ci-evidence-${{ github.sha }}
           path: |
-            app-core.log
-            narration-core.log
-            build/junit.log
+            ci-evidence.log
+            ci-run.log
           retention-days: 90
 
   android-build:

@@ -1,7 +1,7 @@
 # SONATA_IMPLEMENTATION_LEDGER
 
 **Status:** Stage 7b production candidate
-**Candidate commit:** `c6b7db5b355831d1da11c040f944349a465a9cf6`
+**Candidate commit:** `7d2a30139811c951bfc529fa2ea770f02601231b`
 **Date:** 2026-11-20
 
 The ledger records what was built, when, at which commit, and what evidence exists
@@ -101,8 +101,8 @@ point the decision was made.
 |---|---|
 | Branch | `integration/stage7b-prod-candidate` |
 | Merge commit | `07c68fe` — offline branch merged into S0 baseline |
-| Candidate commit | `c6b7db5b355831d1da11c040f944349a465a9cf6` |
-| Files in tree | 316 tracked |
+| Candidate commit | `7d2a30139811c951bfc529fa2ea770f02601231b` |
+| Files in tree | 184 tracked |
 | App sources | 88 Kotlin files |
 | Narration-core sources | 21 Kotlin files |
 | Tests executed | 112 (app core) + 169 (narration core) = **281** |
@@ -130,6 +130,7 @@ Every change below traces to a Stage 7a finding. Nothing was changed for taste.
 | 12 | Performance criteria NFR-10..13 adopted from E11 | No performance criteria |
 | 13 | CI workflow bound to the commit SHA | A2 |
 | 14 | JVM harness with declared, printed scope | Reproducibility |
+| 15 | Harness **tracked** under `ci/` instead of living in gitignored `build/` | Reproducibility — see below |
 
 ### The most important change
 
@@ -138,6 +139,19 @@ Item 5. When `R11` was finally pointed at the real manifest it **failed**, with
 The product had been violating its own privacy policy while the test reported
 success. That is the concrete cost of a fixture-based gate, and it is why the
 finding was a blocker rather than a nit.
+
+### The second most important change
+
+Item 15. The first Stage 7b cut cited `ci-evidence.log` as proof of its test
+results, but the script that generated the log lived in `build/`, which
+`.gitignore` excludes (`/build`, `*/build/`). **A reviewer who checked out the
+candidate SHA could not regenerate the evidence.** This is Stage 7a's B1
+defect — "the reviewed artifact is not the artifact that ships" — one level
+down, and it was caught during the push for this stage rather than by a test.
+
+The harness now lives in `ci/run-ci.sh` with `ci/scope.py`, both tracked and
+executable (`100755`). `ci-evidence.log` is regenerable by running
+`./ci/run-ci.sh` at the commit it names.
 
 ---
 
@@ -183,9 +197,10 @@ This is recorded as a fact, not a defect to be hidden. It is the root cause of B
 
 | Evidence | Location | Bound to |
 |---|---|---|
-| CI run log | `ci-evidence.log` | `c6b7db5` |
-| App-core test log | `build/junit.log` | `c6b7db5` |
-| Narration-core test log | `narration-core/build/test-classes` run | `c6b7db5` |
+| CI harness | `ci/run-ci.sh`, `ci/scope.py` | `7d2a301` |
+| CI run log | `ci-evidence.log` | `7d2a301` (line 2) |
+| App-core test result | `ci-evidence.log`, job 1 section | `7d2a301` |
+| Narration-core test result | `ci-evidence.log`, job 2 section | `7d2a301` |
 | Stage 7a review | `webpages/sonata-stage7a-review/index.html` | pre-merge tree |
 | Historical record | `docs/evolution/E0..E11` | as written |
-| Reproducible build info | `docs/SONATA_PRODUCTION_HANDOFF.md` §4 | `c6b7db5` |
+| Reproducible build info | `docs/SONATA_PRODUCTION_HANDOFF.md` §4 | `7d2a301` |

@@ -28,7 +28,16 @@ cd "$(dirname "$0")/.."
 CHECK_ONLY=0
 [ "${1:-}" = "--check" ] && CHECK_ONLY=1
 
-KOTLINC=${KOTLINC:-/opt/tools/kotlinc/bin/kotlinc}
+# Toolchain resolution. On a GitHub runner kotlinc is on PATH; in the sandbox
+# that prepared this candidate it lives under /opt/tools. Resolve in that order
+# so the same script works in both places without editing.
+if [ -z "${KOTLINC:-}" ]; then
+  if command -v kotlinc >/dev/null 2>&1; then
+    KOTLINC=$(command -v kotlinc)
+  else
+    KOTLINC=/opt/tools/kotlinc/bin/kotlinc
+  fi
+fi
 LIB=${LIB:-/opt/tools/lib}
 STD=${STD:-$(dirname "$KOTLINC")/../lib}
 export KOTLINC LIB STD

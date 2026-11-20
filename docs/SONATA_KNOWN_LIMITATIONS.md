@@ -1,7 +1,7 @@
 # SONATA_KNOWN_LIMITATIONS
 
 **Status:** Stage 7b production candidate
-**Candidate commit:** `c6b7db5b355831d1da11c040f944349a465a9cf6`
+**Candidate commit:** `7d2a30139811c951bfc529fa2ea770f02601231b`
 **Date:** 2026-11-20
 
 Every limitation below is a fact about this candidate, not a plan. Where a
