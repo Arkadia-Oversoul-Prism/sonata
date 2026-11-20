@@ -38,6 +38,7 @@ class DeviceCapabilityDetectorTest {
         assertEquals(8, result.cpuCoreCount)
         assertEquals(6L * 1024 * 1024 * 1024, result.profile.ramBytes)
         assertEquals(12L * 1024 * 1024 * 1024, result.profile.freeStorageBytes)
+        assertEquals(2L * 1024 * 1024 * 1024, result.profile.availableRamBytes)
         assertTrue(result.supportsArm64)
         assertTrue(result.vulkanFeaturePresent)
     }
@@ -77,7 +78,7 @@ class DeviceCapabilityDetectorTest {
         assertEquals(0L, result.totalRamBytes)
         assertEquals(0L, result.availableRamBytes)
         assertEquals(0L, result.freeStorageBytes)
-        assertEquals(1, result.cpuCoreCount.coerceAtMost(1))
+        assertEquals(1, result.cpuCoreCount)
         assertFalse(result.supportsArm64)
         assertFalse(result.profile.thermalValidated)
     }
@@ -87,5 +88,31 @@ class DeviceCapabilityDetectorTest {
         val result = DeviceCapabilityDetector.from(snapshot())
 
         assertEquals("Samsung SM-A235F", result.profile.label)
+    }
+
+    @Test
+    fun `model compatibility uses currently available RAM not just installed RAM`() {
+        val descriptor = ModelDescriptor(
+            id = "test-model",
+            family = "test",
+            version = "1",
+            sizeBytes = 10L * 1024 * 1024,
+            minRamBytes = 100L * 1024 * 1024,
+            sampleRate = 24_000,
+            languages = listOf("en"),
+            role = ModelRole.BASE_SYNTHESIZER,
+        )
+        val result = DeviceCapabilityDetector.from(
+            snapshot(
+                totalRam = 8L * 1024 * 1024 * 1024,
+                availableRam = 100L * 1024 * 1024,
+            ),
+        )
+
+        assertFalse(ModelCompatibility.canLoad(descriptor, result.profile))
+        assertEquals(
+            "This device does not have enough memory for test-model",
+            ModelCompatibility.refusalReason(descriptor, result.profile),
+        )
     }
 }
