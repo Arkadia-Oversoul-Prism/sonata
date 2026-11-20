@@ -1,10 +1,10 @@
 === CI EVIDENCE ===
-commit_sha=3d860c6fe8d88396d537f202b7d3bb7947b5c59f
-short_sha=3d860c6
-tree_sha=b278b65a2d90130e37d6ee99be18fce2a86c50e6
+commit_sha=a102db4f01b04f95214216c3118545d4030cbb02
+short_sha=a102db4
+tree_sha=48cfba048e1b18582b21febde68e9a11e0677543
 branch=integration/stage7b-prod-candidate
 dirty_files=0
-date_utc=2026-11-20T12:15:45Z
+date_utc=2026-11-20T12:18:56Z
 harness=ci/run-ci.sh (tracked in this tree)
 android_sdk=ABSENT - Gradle build, lint and device tests NOT RUN
 
@@ -70,7 +70,7 @@ test_classes=8
   CLASS com.arkadia.sonata.offline.NarrationIntelligenceTest
   CLASS com.arkadia.sonata.offline.ReadAlongTest
 JUnit version 4.13.2
-Time: 0.305
+Time: 0.391
 OK (112 tests)
 
 TEST_EXIT=0
@@ -85,7 +85,7 @@ test_classes=6
 JUnit version 4.13.2
 ................................................................connectivityProbe: live=true elapsedMs=99
 .........................................................................................................
-Time: 2.312
+Time: 2.591
 
 OK (169 tests)
 
