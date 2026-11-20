@@ -1,7 +1,7 @@
 # SONATA_PRODUCTION_HANDOFF
 
 **Status:** Stage 7b production candidate
-**Candidate commit:** `7d2a30139811c951bfc529fa2ea770f02601231b`
+**Candidate commit:** `3d860c6fe8d88396d537f202b7d3bb7947b5c59f`
 **Branch:** `integration/stage7b-prod-candidate`
 **Base:** `235346bee72b9162935ef74e05c84caa91c7bd13` (default branch `feature/sonata-tts-app`)
 **Merge commit:** `07c68fe`
@@ -57,8 +57,8 @@ This is not a failed stage. Substantial, verifiable work was done:
 
 | # | Criterion | Evidence |
 |---|---|---|
-| A1 | Integration tree at a named commit | `7d2a30139811c951bfc529fa2ea770f02601231b` |
-| A2 | CI runs against that exact commit | `ci-evidence.log` line 2: `commit_sha=7d2a301…` |
+| A1 | Integration tree at a named commit | `3d860c6fe8d88396d537f202b7d3bb7947b5c59f` |
+| A2 | CI runs against that exact commit | `ci-evidence.log` line 2: `commit_sha=3d860c6…` |
 | A3 | All executable tests pass | 112 + 169 = 281, 0 failures |
 | A4 | Privacy verified against the real manifest | `R11` — and it found a violation, now fixed |
 | A5 | No placeholder presented as production | Neural tier reclassified unsupported |
@@ -83,7 +83,7 @@ Every item traces to a Stage 7a finding.
 
 | Finding | Fix | Verified by |
 |---|---|---|
-| B1 — integration commit never published | Merged offline branch into S0 baseline; added `narration-core/` as a real module | `07c68fe`, `7d2a301` |
+| B1 — integration commit never published | Merged offline branch into S0 baseline; added `narration-core/` as a real module | `07c68fe`, `3d860c6` |
 | B2 — placeholder production runtime | Neural tier reclassified **unsupported**; no JNI shim exists | `grep external fun` → none |
 | B3 — no README classification | Five-way classification added | `README.md` |
 | B4 — privacy gate tested against a fixture | `R11` reads the real manifest and fails if absent | It failed, exposing 4 violations |
@@ -115,7 +115,7 @@ success.
 |---|---|
 | Repository | `github.com/Arkadia-Oversoul-Prism/sonata` |
 | Branch | `integration/stage7b-prod-candidate` |
-| Commit | `7d2a30139811c951bfc529fa2ea770f02601231b` |
+| Commit | `3d860c6fe8d88396d537f202b7d3bb7947b5c59f` |
 | Base commit | `235346bee72b9162935ef74e05c84caa91c7bd13` |
 | Merge commit | `07c68fe` |
 | Tracked files | 316 |
@@ -142,7 +142,7 @@ success.
 ```bash
 git clone https://github.com/Arkadia-Oversoul-Prism/sonata.git
 cd sonata
-git checkout 7d2a30139811c951bfc529fa2ea770f02601231b
+git checkout 3d860c6fe8d88396d537f202b7d3bb7947b5c59f
 
 # Install Kotlin 1.9.22 and JDK 17, fetch the jars listed in §4.2,
 # then:
@@ -285,7 +285,7 @@ perform its one function.
 |---|---|
 | Prepared by | DevOps Automator |
 | Date | 2026-11-20 |
-| Candidate commit | `7d2a30139811c951bfc529fa2ea770f02601231b` |
+| Candidate commit | `3d860c6fe8d88396d537f202b7d3bb7947b5c59f` |
 | Tests | 281 passed, 0 failed |
 | Merged | **No** |
 | Released | **No** |

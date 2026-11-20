@@ -14,7 +14,7 @@ earlier entry stands as written and this entry states the correction.
 |---|---|
 | Project | SONATA-PRODUCT-RECOVERY-001 |
 | Stage | 7b — production candidate and review package |
-| Candidate commit | `7d2a30139811c951bfc529fa2ea770f02601231b` |
+| Candidate commit | `3d860c6fe8d88396d537f202b7d3bb7947b5c59f` |
 | Branch | `integration/stage7b-prod-candidate` |
 | Base | `235346bee72b9162935ef74e05c84caa91c7bd13` |
 | Merge commit | `07c68fe` |
