@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Backup exclusion rules for Sonata.
+
+  allowBackup is already false, so nothing is backed up at all. These rules exist
+  as defence in depth: if a future change re-enables backup, the private data
+  still must not leave the device. The privacy audit
+  (ai.sonata.privacy.ManifestAudit, check BACKUP_RULES_EXCLUDE_PRIVATE_DATA)
+  asserts that both the voice samples and the document database are excluded.
+-->
+<data-extraction-rules>
+    <cloud-backup>
+        <exclude domain="database" path="sonata.db" />
+        <exclude domain="database" path="sonata.db-shm" />
+        <exclude domain="database" path="sonata.db-wal" />
+        <exclude domain="file" path="voice_samples" />
+        <exclude domain="file" path="voice_adapters" />
+        <exclude domain="file" path="exports" />
+        <exclude domain="sharedpref" path="sonata_prefs.xml" />
+    </cloud-backup>
+    <device-transfer>
+        <exclude domain="database" path="sonata.db" />
+        <exclude domain="file" path="voice_samples" />
+        <exclude domain="file" path="voice_adapters" />
+        <exclude domain="file" path="exports" />
+        <exclude domain="sharedpref" path="sonata_prefs.xml" />
+    </device-transfer>
+</data-extraction-rules>

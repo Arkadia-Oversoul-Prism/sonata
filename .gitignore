@@ -15,5 +15,25 @@ app/release/
 # cover app/build, so build artifacts were stageable).
 /app/build/
 
+# Any module's build output, including narration-core/build and build/jvm.
+# Stage 7b: the JVM harness writes compiled classes under these paths and they
+# were briefly committed. They are derived artifacts and must never be tracked.
+*/build/
+**/build/
+
+# Compiled classes and archives that are not the Gradle wrapper.
+*.class
+*.jar
+!gradle/wrapper/gradle-wrapper.jar
+
+# Signing material — must never be committed.
+keystore.properties
+signing.properties
+
+# Local evidence scratch. ci-evidence.log IS tracked on purpose: it is the
+# evidence the production-review package cites, bound to the candidate SHA.
+*.log
+!ci-evidence.log
+
 # Agent working notes (local scratch; not part of the product).
 .openhands/
