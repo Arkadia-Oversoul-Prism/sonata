@@ -77,7 +77,12 @@ jobs:
           fetch $base/com/squareup/okio/okio-jvm/3.6.0/okio-jvm-3.6.0.jar okio-jvm-3.6.0.jar 200000
           fetch $base/org/json/json/20240303/json-20240303.jar json-20240303.jar 50000
           fetch $google/androidx/room/room-common/2.6.1/room-common-2.6.1.jar room-common-2.6.1.jar 20000
-          fetch $google/androidx/annotation/annotation-jvm/1.7.1/annotation-jvm-1.7.1.jar annotation-jvm-1.7.1.jar 20000
+          # The harness expects annotation-1.7.1.jar (see CP_JARS in
+          # ci/run-ci.sh). The artifact is published as annotation-jvm-1.7.1.jar,
+          # so it is saved under the name the harness looks for. The preflight in
+          # run-ci.sh caught this mismatch as MISSING JAR rather than letting
+          # kotlinc fail on unresolved references.
+          fetch $google/androidx/annotation/annotation-jvm/1.7.1/annotation-jvm-1.7.1.jar annotation-1.7.1.jar 20000
           ls -la
 
       - name: JVM verification (app core + narration core)
