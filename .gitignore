@@ -26,6 +26,12 @@ app/release/
 *.jar
 !gradle/wrapper/gradle-wrapper.jar
 
+# Python bytecode cache from the ci/ harness. ci/scope.py is imported by the
+# harness, so running it writes __pycache__; one such file was committed.
+__pycache__/
+*.pyc
+*.pyo
+
 # Signing material — must never be committed.
 keystore.properties
 signing.properties

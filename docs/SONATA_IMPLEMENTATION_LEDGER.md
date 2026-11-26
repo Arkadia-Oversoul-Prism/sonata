@@ -292,3 +292,52 @@ The engine. Everything else in this repository is supporting work for a product
 that cannot yet perform its one function. Concretely: bundle a model, implement
 the JNI bridge behind `NativeSession`, and verify inference on a device. Until
 that exists, no amount of P0/P1 polish changes the verdict.
+
+---
+
+## 7. Tracked bytecode cache removed, and the harness now judges the tree
+
+### 7.1 Defect
+
+`ci/__pycache__/scope.cpython-311.pyc` (7,011 bytes) was committed on this
+branch. `ci/scope.py` is imported by the harness, so running it writes
+`__pycache__`; the cache produced by that import was staged along with the
+source. Nothing in the tree judged it, so it would have shipped with the
+candidate.
+
+This is the repository's own defect class, one level down from Stage 7a's B1
+finding: a tracked derived artifact is an artifact no reviewer reads and every
+checkout rewrites, and a stale `.pyc` can shadow the source it claims to be
+compiled from.
+
+### 7.2 Repair and guard
+
+| Change | Purpose |
+|---|---|
+| `.gitignore` — `__pycache__/`, `*.pyc`, `*.pyo` | the cache can no longer be staged by habit |
+| `git rm --cached ci/__pycache__/scope.cpython-311.pyc` | the committed artifact leaves the tree |
+| `ci/hygiene.py` (new, stdlib only) | fails when any **tracked** path is a bytecode cache; skips with a note outside a git checkout, so an exported tarball is not misjudged |
+| `ci/run-ci.sh` preflight | runs the guard before job 1, so a red run is red for the tree and not only for the sources it compiles |
+
+### 7.3 Evidence (this sandbox: `python3` only, no JVM)
+
+| Check | Result |
+|---|---|
+| `python3 ci/hygiene.py` on the pre-repair tree | exit **1**, names `ci/__pycache__/scope.cpython-311.pyc` |
+| same, after untracking | exit **0**, `no tracked bytecode cache` |
+| negative control — `git add -f ci/__pycache__/probe.cpython-311.pyc` | exit **1**, names the probe |
+| negative control through the harness | `SUMMARY preflight=FAIL`, harness exit **1** |
+| harness after removing the probe | preflight passes, proceeds to job 1 |
+
+The pre-repair run is a *live* control on the real file, not a fixture: the
+guard was executed against the tree that carried the defect before it was
+repaired.
+
+### 7.4 Not claimed
+
+- **Job 1 reports `COMPILE FAILED` in this sandbox** because `kotlinc` and `java`
+  are absent here. That is the toolchain absence `ci/run-ci.sh` already documents
+  (`android_sdk=ABSENT`), not a source defect. The authoritative JVM and APK
+  evidence remains GitHub Actions.
+- No source file, test assertion, or neural-tier claim changed. **A10 (the
+  engine) remains the blocking item** and this entry does not touch it.
