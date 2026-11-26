@@ -1,10 +1,10 @@
 === CI EVIDENCE ===
-commit_sha=49691de5b57dc10b4434bd9795b04dddb96935fe
-short_sha=49691de
-tree_sha=758c481d38ce5cdc34c0d8050d2012e2dfeb6674
+commit_sha=744a995142892031214f8e8ac32ad3d57d7efdf5
+short_sha=744a995
+tree_sha=2d35b85e9cf5a16ae0844bea2d7218d41d526d9f
 branch=feat/playback-retry-and-truthful-progress
-dirty_files=10
-date_utc=2026-11-26T00:27:08Z
+dirty_files=3
+date_utc=2026-11-26T00:38:15Z
 harness=ci/run-ci.sh (tracked in this tree)
 android_sdk=ABSENT - Gradle build, lint and device tests NOT RUN
 
@@ -15,7 +15,7 @@ openjdk version "17.0.21.1" 2026-11-17
 === JOB 1: app core ===
 === SCOPE ===
 jvm_main_sources=47
-jvm_test_sources=16
+jvm_test_sources=17
 excluded_sources=24
   EXCLUDED app/src/main/kotlin/com/arkadia/sonata/AndroidAudioPlayer.kt
   EXCLUDED app/src/main/kotlin/com/arkadia/sonata/AndroidOfflineVoice.kt
@@ -46,7 +46,7 @@ excluded_sources=24
 COMPILE_EXIT=0
 
 === TEST ===
-test_classes=15
+test_classes=16
   CLASS com.arkadia.sonata.BackendConfigTest
   CLASS com.arkadia.sonata.NotificationTextTest
   CLASS com.arkadia.sonata.PlaybackStateTest
@@ -61,10 +61,11 @@ test_classes=15
   CLASS com.arkadia.sonata.offline.NarrationIntelligenceTest
   CLASS com.arkadia.sonata.offline.ReadAlongTest
   CLASS com.arkadia.sonata.offline.ReliabilityTest
+  CLASS com.arkadia.sonata.offline.TextNormalizerNumbersTest
   CLASS com.arkadia.sonata.offline.VoiceStudioTest
 JUnit version 4.13.2
-Time: 0.814
-OK (224 tests)
+Time: 0.981
+OK (236 tests)
 
 TEST_EXIT=0
 RESULT=PASS
@@ -76,14 +77,14 @@ narration_core_test_sources=6
 COMPILE_EXIT=0
 test_classes=6
 JUnit version 4.13.2
-................................................................connectivityProbe: live=true elapsedMs=98
+................................................................connectivityProbe: live=true elapsedMs=97
 .........................................................................................................
-Time: 2.785
+Time: 3.008
 
 OK (169 tests)
 
 
 NARRATION_EXIT=0
 
-SUMMARY total_tests=393 job1_exit=0 job2_exit=0
+SUMMARY total_tests=405 job1_exit=0 job2_exit=0
 VERDICT=PASS
