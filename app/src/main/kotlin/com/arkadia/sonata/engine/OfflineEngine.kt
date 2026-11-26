@@ -37,6 +37,15 @@ class OfflineEngine(
     private val device: DeviceProfile,
     private val networkProbe: NetworkProbe = NoNetworkProbe,
     private val modelProvider: SpeechModelProvider = DefaultSpeechModelProvider,
+    /**
+     * The platform-engine fallback, used when no neural model is installed.
+     *
+     * Null means "no fallback available", which is the honest state of a JVM test
+     * or a device whose platform engine failed to initialise. When it is present,
+     * a device with no neural model can still produce a saved narration — which is
+     * the difference between an app that can speak and one that cannot.
+     */
+    private val fallback: SpeechModel? = null,
 ) {
 
     /**
@@ -61,7 +70,11 @@ class OfflineEngine(
 
         val model = resolveModel(voice)
             ?: return NarrationOutcome.Failure(
-                "No speech model is installed for this device. Import a voice model to narrate offline.",
+                if (voice is VoiceReference.Cloned) {
+                    "No voice model is installed for this device. Import a voice model to narrate in your own voice."
+                } else {
+                    "No speech engine is available on this device. Import a voice model to narrate offline."
+                },
             )
 
         // The row is written before synthesis, so an interruption is recoverable.
@@ -142,7 +155,7 @@ class OfflineEngine(
             return NarrationOutcome.Failure("That narration is already complete")
         }
         val model = resolveModel(voice)
-            ?: return NarrationOutcome.Failure("No speech model is installed for this device")
+            ?: return NarrationOutcome.Failure("No speech engine is available on this device")
 
         repository.markGenerating(narrationId)
         guardOffline("synthesize")
@@ -200,7 +213,16 @@ class OfflineEngine(
      * quality, but a lower-quality voice is better than no voice.
      */
     private fun resolveModel(voice: VoiceReference?): SpeechModel? {
-        val base = registry.bestBaseFor(device) ?: return null
+        val base = registry.bestBaseFor(device)
+        // No neural model installed or compatible: use the platform engine. This is
+        // the fallback tier, and it is what lets a device with no model file still
+        // produce a saved narration. A cloned voice is refused here rather than
+        // silently downgraded — the platform engine has no adapter stage, and
+        // speaking in a stock voice when the user asked for their own would be a
+        // broken promise, not a graceful degradation.
+        if (base == null) {
+            return if (voice is VoiceReference.Cloned) null else fallback
+        }
         return when (voice) {
             is VoiceReference.Cloned -> {
                 val converter = registry.toneConverters().firstOrNull {

@@ -40,17 +40,49 @@ jobs:
           set -euo pipefail
           mkdir -p "$HOME/.sonata-lib"
           cd "$HOME/.sonata-lib"
-          base=https://repo1.maven.org/maven2
+          # repo.maven.apache.org is the canonical host; repo1.maven.org is a
+          # mirror that rate-limits shared runner IPs. A rate-limited mirror
+          # returns a short error page with HTTP 200, which curl -sSLO writes to
+          # disk as if it were a jar.
+          base=https://repo.maven.apache.org/maven2
           google=https://dl.google.com/dl/android/maven2
-          curl -sSLO $base/junit/junit/4.13.2/junit-4.13.2.jar
-          curl -sSLO $base/org/hamcrest/hamcrest-core/1.3/hamcrest-core-1.3.jar
-          curl -sSLO $base/org/jetbrains/kotlinx/kotlinx-coroutines-core-jvm/1.7.3/kotlinx-coroutines-core-jvm-1.7.3.jar
-          curl -sSLO $base/org/jetbrains/kotlinx/kotlinx-coroutines-test-jvm/1.7.3/kotlinx-coroutines-test-jvm-1.7.3.jar
-          curl -sSLO $base/com/squareup/okhttp3/okhttp/4.12.0/okhttp-4.12.0.jar
-          curl -sSLO $base/com/squareup/okio/okio-jvm/3.6.0/okio-jvm-3.6.0.jar
-          curl -sSLO $base/org/json/json/20240303/json-20240303.jar
-          curl -sSLO $google/androidx/room/room-common/2.6.1/room-common-2.6.1.jar
-          curl -sSLO $google/androidx/annotation/annotation-jvm/1.7.1/annotation-jvm-1.7.1.jar
+
+          # fetch <url> <filename> <minimum-bytes>
+          #
+          # A jar that is not a zip is not a jar. Without this check the harness
+          # compiled against 96-byte error pages and reported "COMPILE FAILED",
+          # which reads as a code defect and is not one. Failing here names the
+          # real cause.
+          fetch() {
+            local url="$1" out="$2" min="$3" attempt
+            for attempt in 1 2 3 4 5; do
+              curl -sSL --retry 3 --retry-delay 2 -o "$out" "$url" || true
+              if [ -s "$out" ] && [ "$(stat -c%s "$out")" -ge "$min" ] \
+                 && [ "$(head -c2 "$out")" = "PK" ]; then
+                return 0
+              fi
+              echo "  retry $attempt: $out is not a valid jar ($(stat -c%s "$out" 2>/dev/null || echo 0) bytes)"
+              sleep $((attempt * 3))
+            done
+            echo "::error::Could not fetch a valid jar: $url"
+            echo "  last response: $(head -c 200 "$out" 2>/dev/null)"
+            return 1
+          }
+
+          fetch $base/junit/junit/4.13.2/junit-4.13.2.jar junit-4.13.2.jar 200000
+          fetch $base/org/hamcrest/hamcrest-core/1.3/hamcrest-core-1.3.jar hamcrest-core-1.3.jar 30000
+          fetch $base/org/jetbrains/kotlinx/kotlinx-coroutines-core-jvm/1.7.3/kotlinx-coroutines-core-jvm-1.7.3.jar kotlinx-coroutines-core-jvm-1.7.3.jar 200000
+          fetch $base/org/jetbrains/kotlinx/kotlinx-coroutines-test-jvm/1.7.3/kotlinx-coroutines-test-jvm-1.7.3.jar kotlinx-coroutines-test-jvm-1.7.3.jar 100000
+          fetch $base/com/squareup/okhttp3/okhttp/4.12.0/okhttp-4.12.0.jar okhttp-4.12.0.jar 500000
+          fetch $base/com/squareup/okio/okio-jvm/3.6.0/okio-jvm-3.6.0.jar okio-jvm-3.6.0.jar 200000
+          fetch $base/org/json/json/20240303/json-20240303.jar json-20240303.jar 50000
+          fetch $google/androidx/room/room-common/2.6.1/room-common-2.6.1.jar room-common-2.6.1.jar 20000
+          # The harness expects annotation-1.7.1.jar (see CP_JARS in
+          # ci/run-ci.sh). The artifact is published as annotation-jvm-1.7.1.jar,
+          # so it is saved under the name the harness looks for. The preflight in
+          # run-ci.sh caught this mismatch as MISSING JAR rather than letting
+          # kotlinc fail on unresolved references.
+          fetch $google/androidx/annotation/annotation-jvm/1.7.1/annotation-jvm-1.7.1.jar annotation-1.7.1.jar 20000
           ls -la
 
       - name: JVM verification (app core + narration core)

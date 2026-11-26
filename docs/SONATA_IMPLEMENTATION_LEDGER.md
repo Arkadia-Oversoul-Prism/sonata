@@ -108,6 +108,95 @@ point the decision was made.
 | Tests executed | 112 (app core) + 169 (narration core) = **281** |
 | Tests failing | 0 |
 
+### Stage L1 — Offline speech engine (2026-11-26)
+
+| Field | Value |
+|---|---|
+| Branch | `feat/platform-speech-engine-001` |
+| PR | #8 (draft, not merged) |
+| Commit | `e1042065404e2a237aca127650875227638d22bf` |
+| Base | `feature/sonata-tts-app` @ `49691de` |
+| Tests executed | 299 (was 281; **18 new**) |
+| Tests failing | 0 |
+| Negative control | Fixed 44-byte WAV offset instead of a chunk walk → **suite fails** |
+| CI — Sonata CI (JVM) | ✅ success, run `45787331162` |
+| CI — Build Release APK (unit, lint, assembleRelease, bundleRelease) | ✅ success, run `45787331093` |
+| CI — Instrumented tests (API 34 emulator) | run `45787339148` |
+
+**What was actually broken.** `SpeechModel` was an interface whose only production
+implementation was `UnavailableNativeSession`. `OfflineEngine.resolveModel`
+therefore returned null and every narration failed with *"no speech model is
+installed"*. Separately, `OfflineEngine` was constructed **only in tests** — the
+app's playback path (`TtsEngine` → `AndroidOfflineVoice`) streams to the speaker
+and saves nothing. Two independent gaps, either of which alone made a saved
+narration impossible.
+
+**What was built.**
+
+| File | Role |
+|---|---|
+| `export/WavReader.kt` | Parses a WAV by walking its chunk list |
+| `engine/PlatformSpeechModel.kt` | Pure-JVM adapter: WAV→PCM, failure mapping, version attribution |
+| `AndroidPlatformSynthesis.kt` | The `synthesizeToFile` binding, with a bounded wait |
+| `EngineFactory.kt` | Constructs the engine in production |
+| `engine/OfflineEngine.kt` | Fallback tier; honest failure messages |
+
+**Engine and model selected.** The Android platform `TextToSpeech` engine via
+`synthesizeToFile`. **No model is bundled** — this is the fallback tier, and it
+needs no model file. Licence: the platform engine is part of Android (Apache-2.0 /
+device vendor). No third-party model licence applies because no third-party model
+is present. Bundling Kokoro or Piper is a licensing and provenance decision for the
+repository owner and was deliberately not taken here.
+
+**Why `synthesizeToFile` and not `speak`.** `speak` streams to the speaker and
+produces nothing that can be saved, exported or replayed. `synthesizeToFile` is the
+only platform API that renders to a file, which is what the library path needs.
+`AndroidOfflineVoice` already used `speak` for playback; both are needed and they
+are different APIs.
+
+**Why the WAV is parsed rather than assumed.** The platform engine may emit
+`LIST`/`fact` chunks before `data`. A fixed 44-byte offset would read metadata as
+audio — a click at the start of every narration. The negative control above is
+exactly that bug, and it fails the suite.
+
+**Why the sample rate comes from the file.** The engine picks its own rate. A
+descriptor that disagreed with the audio would make every duration wrong, and
+duration is what the library displays.
+
+**What is NOT verified.** That a real device's engine produces audio. The adapter
+is tested on the JVM against a double, which proves the wiring and the WAV handling,
+not the platform call. Recorded as **UNVERIFIED**, not claimed.
+
+**Four defects the JVM harness could not see.** All four were found only by running
+the real Gradle pipeline on GitHub Actions, and all four would have shipped:
+
+1. `EngineFactory` did not compile — `SonataRepository` passed where `SonataStore`
+   was expected. The file imports `android.content.Context`, so `ci/scope.py`
+   excludes it and never compiled it.
+2. `PlatformFallbackEngineTest` did not compile — `failureReason` does not exist;
+   the field is `errorReason`. The test references `OfflineEngine`, which is
+   excluded, so the test was excluded too.
+3. The JVM job compiled against **96-byte files**. `repo1.maven.org` rate-limits
+   shared runner IPs and answers with a short error page under HTTP 200, which
+   `curl -sSLO` writes to disk as if it were a jar. kotlinc then failed with
+   unresolved references and the harness reported `COMPILE FAILED` — a code defect
+   that did not exist. Fixed in two places: the workflow fetches from
+   `repo.maven.apache.org` and validates every jar (non-empty, above a per-jar
+   minimum, starting with `PK`), and `ci/run-ci.sh` preflights the classpath and
+   exits 2 with `RESULT=TOOLCHAIN_BROKEN`.
+4. A jar was saved under the wrong name — `annotation-jvm-1.7.1.jar` on disk while
+   `CP_JARS` looks for `annotation-1.7.1.jar`. The new preflight reported
+   `MISSING JAR` instead of letting kotlinc fail obscurely.
+
+**The lesson, recorded because it is the point.** An excluded file is an unverified
+file. The JVM harness verifies 299 tests but cannot see what it excludes, and two
+compile errors lived in exactly that blind spot. The Gradle job is the only thing
+that compiles the whole tree, which is why it must stay non-optional.
+
+**Still missing.** No neural model (the quality tier); no cloned voice (the platform
+engine has no adapter stage, so a cloned request is refused rather than downgraded);
+`EngineFactory` is not yet called from the UI, so no screen reaches `narrate()`.
+
 ---
 
 ## 3. What Stage 7b changed, and why

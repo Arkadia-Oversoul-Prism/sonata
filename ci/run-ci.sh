@@ -57,6 +57,35 @@ CP_JARS="$CP_JARS:$LIB/kotlinx-coroutines-core-jvm-1.7.3.jar:$LIB/kotlinx-corout
 CP_JARS="$CP_JARS:$LIB/room-common-2.6.1.jar:$LIB/annotation-1.7.1.jar"
 CP_JARS="$CP_JARS:$LIB/okhttp-4.12.0.jar:$LIB/okio-jvm-3.6.0.jar:$LIB/json-20240303.jar"
 
+# ------------------------------------------------------------------ preflight
+#
+# Every classpath jar must be a real zip. A Maven mirror that rate-limits a
+# shared runner IP answers with a short error page and HTTP 200, and curl writes
+# it to disk as if it were a jar. kotlinc then fails with a wall of unresolved
+# references and the harness reports "COMPILE FAILED" — which reads as a code
+# defect and is not one. This check names the real cause and stops.
+#
+# It is here rather than only in the workflow because the harness is the thing
+# that claims to have verified the tree. A harness that cannot tell a broken
+# toolchain from broken code is not evidence.
+BAD_JARS=0
+for jar in $(echo "$CP_JARS" | tr ':' ' '); do
+  if [ ! -f "$jar" ]; then
+    echo "MISSING JAR: $jar"
+    BAD_JARS=1
+  elif [ "$(head -c2 "$jar" 2>/dev/null)" != "PK" ]; then
+    echo "NOT A JAR: $jar ($(stat -c%s "$jar" 2>/dev/null || echo 0) bytes)"
+    BAD_JARS=1
+  fi
+done
+if [ "$BAD_JARS" -ne 0 ]; then
+  echo ""
+  echo "RESULT=TOOLCHAIN_BROKEN"
+  echo "The classpath is not usable, so nothing was verified. This is NOT a code"
+  echo "failure and must not be reported as one."
+  exit 2
+fi
+
 {
   echo "=== CI EVIDENCE ==="
   echo "commit_sha=$SHA"

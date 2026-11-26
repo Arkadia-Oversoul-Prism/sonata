@@ -233,7 +233,12 @@ class EngineTest {
         )
         val outcome = engine.narrate("Text.", "Title")
         assertTrue(outcome is NarrationOutcome.Failure)
-        assertTrue((outcome as NarrationOutcome.Failure).reason.contains("No speech model"))
+        // The message changed when the platform fallback was added: with no neural
+        // model AND no fallback, the honest statement is that no engine is
+        // available, not that no model is installed. The distinction matters —
+        // "no model" implies importing one would fix it, which is no longer the
+        // only path.
+        assertTrue((outcome as NarrationOutcome.Failure).reason.contains("No speech engine"))
     }
 
     @Test
