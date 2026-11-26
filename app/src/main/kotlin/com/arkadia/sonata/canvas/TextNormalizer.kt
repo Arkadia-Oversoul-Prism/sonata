@@ -33,6 +33,7 @@ object TextNormalizer {
         text = stripHtml(text)
         text = stripMarkdown(text)
         text = flattenTables(text)
+        text = normaliseCase(text)
         text = stripEmoji(text)
         text = normaliseSymbols(text)
         text = expandAbbreviations(text)
@@ -114,6 +115,83 @@ object TextNormalizer {
         }
         return out.toString()
     }
+
+    // ── Case ─────────────────────────────────────────────────────────────────
+
+    /**
+     * Speak an all-caps heading as words instead of spelling it out.
+     *
+     * A heading set in capitals ("INTRODUCTION", "THE END") is typography, not
+     * speech. Engines that treat an all-caps token as an initialism read it letter
+     * by letter, so the listener hears "I N T R O D U C T I O N". Sentence-casing
+     * such a line is what makes it sound read aloud.
+     *
+     * The rule is deliberately narrow, because a wrong rewrite is worse than a
+     * shouted word:
+     *
+     *  - Only a **whole line** is considered. Inline capitals are emphasis inside a
+     *    sentence, and the sentence around them supplies the reading context, so
+     *    they are left alone.
+     *  - A line carrying any lowercase letter is prose, and is left alone.
+     *  - A line made only of known acronyms ("NASA API") is left alone: those are
+     *    either spoken correctly as words or meant to be spelled.
+     *  - An acronym inside a shouted line keeps its case ("THE NASA STORY" ->
+     *    "The NASA story"), so the rewrite never destroys a name.
+     */
+    fun normaliseCase(text: String): String =
+        text.lines().joinToString("\n") { line ->
+            if (isShoutedHeading(line)) sentenceCase(line) else line
+        }
+
+    /** Whether [line] is a line that is entirely capitals and not all acronyms. */
+    fun isShoutedHeading(line: String): Boolean {
+        val trimmed = line.trim()
+        if (trimmed.count { it.isLetter() } < 2) return false
+        if (trimmed.any { it.isLetter() && it.isLowerCase() }) return false
+        val words = trimmed.split(Regex("\\s+"))
+            .map { it.dropWhile { c -> !c.isLetter() }.dropLastWhile { c -> !c.isLetter() } }
+            .filter { it.isNotEmpty() }
+        return words.isNotEmpty() && words.any { it.uppercase() !in ACRONYMS }
+    }
+
+    /** Lowercase [line], capitalise its first word, and keep known acronyms. */
+    fun sentenceCase(line: String): String {
+        val out = StringBuilder(line.length)
+        var firstWord = true
+        var i = 0
+        while (i < line.length) {
+            val c = line[i]
+            if (!c.isLetter()) {
+                out.append(c)
+                i++
+                continue
+            }
+            val start = i
+            while (i < line.length && (line[i].isLetter() || line[i].isDigit() || line[i] == '-' || line[i] == '\'')) i++
+            val word = line.substring(start, i)
+            val kept = word.uppercase() in ACRONYMS
+            when {
+                kept -> out.append(word)
+                firstWord -> out.append(word.lowercase().replaceFirstChar { it.uppercaseChar() })
+                else -> out.append(word.lowercase())
+            }
+            firstWord = false
+        }
+        return out.toString()
+    }
+
+    /**
+     * The acronyms a rewrite must not flatten.
+     *
+     * Kept explicit rather than inferred: a heuristic that guesses "this looks like
+     * an acronym" turns "US" into "us" and changes what a sentence means.
+     */
+    private val ACRONYMS = setOf(
+        "AI", "API", "ARKANA", "CPU", "DOCX", "EU", "FAQ", "GPU", "HTML", "HTTP",
+        "HTTPS", "ID", "JNI", "JSON", "M4A", "MIE", "MP3", "N-ATLAS", "NASA", "OK",
+        "OS", "PCM", "PDF", "RAM", "SDK", "STT", "TBD", "TTS", "UK", "URL", "US",
+        "WAV",
+    )
 
     // ── Emoji ────────────────────────────────────────────────────────────────
 

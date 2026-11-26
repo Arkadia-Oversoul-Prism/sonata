@@ -341,3 +341,57 @@ repaired.
   evidence remains GitHub Actions.
 - No source file, test assertion, or neural-tier claim changed. **A10 (the
   engine) remains the blocking item** and this entry does not touch it.
+
+---
+
+## 8. S1 — shouted headings, and a harness that ran here (append-only)
+
+**Date:** 2026-11-26
+**Base:** `49691de5b57dc10b4434bd9795b04dddb96935fe` (branch `feat/playback-retry-and-truthful-progress`, PR #7)
+
+### 8.1 The defect
+
+`TextNormalizer` had no case rule. A heading set in capitals reached the engine as
+capitals, and an engine that treats an all-caps token as an initialism reads it
+letter by letter — `INTRODUCTION` is heard as "I N T R O D U C T I O N". This is
+the *"uppercase headings spoken unnaturally"* item in the S1 contract, and it was
+the only cleaning rule in the S1 list with no implementation.
+
+### 8.2 The rule
+
+`normaliseCase` runs on each line after markup removal and before the symbol rules.
+It rewrites a line only when the line is **entirely capitals** and is **not made
+only of known acronyms**; the rewrite lowercases the line, capitalises its first
+word, and restores any known acronym (`THE NASA STORY` -> `The NASA story`).
+Prose, inline capitals, and acronym-only lines are untouched. The acronym list is
+explicit because a heuristic that guesses "this looks like an acronym" turns `US`
+into `us` and changes what a sentence means.
+
+### 8.3 Evidence (run in this sandbox)
+
+A JDK and the Kotlin compiler were provisioned here (Temurin `17.0.21.1`,
+kotlinc `1.9.24`, jars from `repo.maven.apache.org` and Google Maven), so the
+tracked harness ran locally rather than only in GitHub Actions. This supersedes the
+"this sandbox: `python3` only, no JVM" note in §7.3 **for this entry**; §7.3 stays
+as written.
+
+| Check | Command | Result |
+|---|---|---|
+| Harness on PR #7 head before the change | `bash ci/run-ci.sh --check` | `total_tests=405`, job1/job2 exit 0 |
+| Harness with the rule | `bash ci/run-ci.sh --check` | `total_tests=418`, job1/job2 exit 0 |
+| **Negative control** — `normaliseCase` call removed | `bash ci/run-ci.sh` | `Tests run: 249, Failures: 5` |
+| Rule restored, harness re-run | `bash ci/run-ci.sh --check` | `total_tests=418`, 0 failures |
+
+The 418 - 405 = 13 delta is exactly the new `TextNormalizerCaseTest` nodes
+(`ci/scope.py` on this branch includes the file; it is not in the excluded set).
+
+### 8.4 Not claimed
+
+- **Not device-validated.** Whether a particular vendor engine spelled the heading
+  is a device observation that was not made here; the rule is verified as a text
+  transformation only.
+- **Inline capitals are deliberately left alone.** Emphasis inside a sentence is
+  read with its surrounding words, and rewriting it would change authored copy
+  without addressing the heading defect.
+- No engine, model, playback, or UI change. `EngineFactory` is still not called
+  from the UI, which remains the next slice.
