@@ -204,3 +204,91 @@ This is recorded as a fact, not a defect to be hidden. It is the root cause of B
 | Stage 7a review | `webpages/sonata-stage7a-review/index.html` | pre-merge tree |
 | Historical record | `docs/evolution/E0..E11` | as written |
 | Reproducible build info | `docs/SONATA_PRODUCTION_HANDOFF.md` §4 | `a102db4` |
+
+---
+
+## 6. Post-merge evolution — PR #7 (2026-11-26)
+
+**Append-only.** Sections 1–5 above are unchanged. This section records what
+happened after PR #5 was merged, and where it contradicts an earlier entry it
+says so rather than editing it.
+
+### 6.1 What changed in the repository before this entry
+
+| Fact | Value |
+|---|---|
+| PR #5 merged into the default branch | `49691de5b57dc10b4434bd9795b04dddb96935fe` |
+| Default branch | `feature/sonata-tts-app` |
+| PR #6 merged (device capability contract) | `53a60c05e8ffd5f42dba24518a8a1e724df5bdd4` on `integration/stage7b-prod-candidate` |
+| Open PRs at the start of this entry | none |
+| Open issues | #1 only |
+
+**This contradicts §2's Stage 7b row**, which records `a102db4` as the candidate.
+`a102db4` was the candidate *at the time*; the tree that actually shipped is
+`49691de`. The earlier row is left as written.
+
+### 6.2 Baseline established for this entry
+
+| Field | Value |
+|---|---|
+| Base commit | `49691de5b57dc10b4434bd9795b04dddb96935fe` |
+| Working tree | clean |
+| Tests at baseline | **281** (112 app core + 169 narration core) |
+| Tests failing at baseline | 0 |
+| Android SDK in this environment | absent — Gradle build not runnable locally |
+
+### 6.3 What this entry changed
+
+Branch `feat/playback-retry-and-truthful-progress`, candidate
+**`3f712ff34795c11dcdd3e73219110ea2ab36c245`**, PR #7 (draft).
+
+| # | Change | Defect it closes | Negative control |
+|---|---|---|---|
+| 1 | `SynthesisResult.Failure` carries a `transient` flag; engine retries twice with exponential backoff | **There was no retry at all.** One 502 / dropped socket / empty 200 mid-passage dropped the rest of the read to the offline voice | Disabling the retry fails 3 tests |
+| 2 | Notification text extracted to `NotificationText`; `SpeechService` refreshes it on a 2 s ticker | **The progress line was frozen.** It was computed once at read start and never rewritten, so a long read showed `Part 1 of 12 · 0%` throughout | Freezing the percentage fails 4 tests |
+| 3 | `$` added to the currency list; `normaliseNumbers` added | **`$1,250` lost its unit entirely** — `$` was absent while €/£/¥ were present. Thousands separators, small ordinals and years also read badly | Covered by 12 new tests |
+| 4 | `ci/scope.py` strips comments before scanning for references | A KDoc link like `[SpeechService]` counted as a code dependency, excluding pure-JVM files from the JVM job — `NotificationText` was excluded from the job that should test it | 112 previously-excluded tests now run |
+
+### 6.4 Two bugs in my own first cut, caught by the tests written for it
+
+Recorded because the pattern matters: the tests were written before the code was
+trusted, and they found real errors in it.
+
+1. The thousands-separator regex only matched the **last** group of a
+   multi-group number, so `1,250` became `12 50`.
+2. The year rule was bounded 1000–2099, so a **price** of `1250` was split into
+   `12 50`. Narrowed to 1900–2099: a bare four-digit number in the wider range
+   is far more often a quantity than a year.
+
+### 6.5 Test and CI evidence at `3f712ff`
+
+| Evidence | Result |
+|---|---|
+| Local harness `./ci/run-ci.sh` | 405 tests, both jobs exit 0 |
+| Job 1 (app core) | 236 tests |
+| Job 2 (narration core) | 169 tests |
+| GitHub Actions — Sonata CI (`45730577830`) | **success** |
+| GitHub Actions — Build Sonata APK, Build Release APK (`45730640054`) | **success** |
+| GitHub Actions — Build Sonata APK, Instrumented tests API 34 (`45730577849`) | **success** |
+
+The instrumented suite passing matters: it is the only check that exercises the
+Android framework, and it is where the `INTERNET`-in-debug-overlay defect was
+caught in the previous entry.
+
+### 6.6 What this entry does NOT change
+
+- **The neural tier is still absent.** No model binary, no JNI bridge, no
+  `assets/`, no `jniLibs/`. `UnavailableNativeSession` is still what a build
+  without the native library gets. **A10 remains the blocking item.**
+- **No device validation.** Gates G1–G6 and S0-1..S0-4: still 0 of 6 executed.
+  The retry backoff and the notification ticker are both timing-dependent and are
+  proven only on the JVM scheduler and the emulator, not on hardware.
+- **No signing.** No keystore, so no publishable APK/AAB.
+- **No merge, release or deploy.** PR #7 is a draft.
+
+### 6.7 Next deterministic task
+
+The engine. Everything else in this repository is supporting work for a product
+that cannot yet perform its one function. Concretely: bundle a model, implement
+the JNI bridge behind `NativeSession`, and verify inference on a device. Until
+that exists, no amount of P0/P1 polish changes the verdict.
