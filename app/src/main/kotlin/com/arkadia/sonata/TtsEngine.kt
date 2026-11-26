@@ -10,6 +10,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -86,6 +87,20 @@ class TtsEngine(
      * because the next piece is synthesised during the current piece's playback.
      */
     private val prefetchDepth: Int = 1,
+    /**
+     * How many times a transiently-failed piece is retried before falling back.
+     *
+     * Injectable so a test can set it to 0 to assert the no-retry path still
+     * behaves, and to a small number to assert exhaustion without waiting.
+     */
+    private val maxRetries: Int = DEFAULT_MAX_RETRIES,
+    /**
+     * Base backoff before the first retry; doubled for each subsequent attempt.
+     *
+     * Injectable because a test must not spend real seconds proving a delay
+     * exists — it asserts the delay was requested, not that the machine slept.
+     */
+    private val retryBaseDelayMs: Long = DEFAULT_RETRY_BASE_DELAY_MS,
 ) {
 
     /**
@@ -172,6 +187,16 @@ class TtsEngine(
 
     /** Pieces whose fetch failed, with the reason, so the read can fall back. */
     private val failed = ConcurrentHashMap<Int, String>()
+
+    /**
+     * How many times each piece has already been retried.
+     *
+     * Kept per piece rather than as one counter for the read: a passage of twenty
+     * pieces must not spend its whole retry budget on the first one, and a piece
+     * that has already been retried twice must not be retried a third time just
+     * because a later piece failed.
+     */
+    private val retries = ConcurrentHashMap<Int, Int>()
 
     /** Set while playback has run past the end of a piece with the next one unfetched. */
     private var awaitingNext = false
@@ -477,6 +502,7 @@ class TtsEngine(
         staged.values.forEach { it.delete() }
         staged.clear()
         failed.clear()
+        retries.clear()
         segments = emptyList()
         fullText = ""
         onlineUrl = ""
@@ -608,15 +634,42 @@ class TtsEngine(
             fetchJobs[index] = scope.launch {
                 val segment = segments[index]
 
-                val result = transport.fetch(
-                    text = segment.text,
-                    voice = settings.voice,
-                    speed = effectiveSpeed(),
-                    baseUrl = url,
-                )
+                // Retry loop. A transient failure is asked again after a backoff;
+                // a permanent one (bad URL, 400) is not, because it would fail
+                // identically and only delay the fallback the user needs.
+                //
+                // The loop is inside the job, so a supersede cancels the whole
+                // thing — including a retry that is currently sleeping — and no
+                // retry can outlive the read it belongs to.
+                var result: SynthesisResult
+                while (true) {
+                    result = transport.fetch(
+                        text = segment.text,
+                        voice = settings.voice,
+                        speed = effectiveSpeed(),
+                        baseUrl = url,
+                    )
 
-                // Superseded while the request was in flight: drop the result.
-                if (myGeneration != generation || !isActive) return@launch
+                    // Superseded while the request was in flight: drop the result.
+                    if (myGeneration != generation || !isActive) return@launch
+
+                    val failure = result as? SynthesisResult.Failure ?: break
+                    if (!failure.transient) break
+
+                    val used = retries[index] ?: 0
+                    if (used >= maxRetries) break
+
+                    retries[index] = used + 1
+                    // Exponential backoff: base, 2x base, 4x base...
+                    val delayMs = retryBaseDelayMs shl used
+                    Log.i(
+                        TAG,
+                        "piece $index failed transiently (${failure.reason}); " +
+                            "retry ${used + 1}/$maxRetries in ${delayMs}ms",
+                    )
+                    delay(delayMs)
+                    if (myGeneration != generation || !isActive) return@launch
+                }
 
                 when (result) {
                     is SynthesisResult.Success -> {
@@ -787,6 +840,7 @@ class TtsEngine(
         staged.values.forEach { it.delete() }
         staged.clear()
         failed.clear()
+        retries.clear()
         currentFile?.delete()
         currentFile = null
         player.stop()
@@ -835,6 +889,7 @@ class TtsEngine(
         staged.values.forEach { it.delete() }
         staged.clear()
         failed.clear()
+        retries.clear()
         state = PlaybackState.Idle
         listener?.onComplete()
     }
@@ -968,5 +1023,27 @@ class TtsEngine(
          * early is no speech at all.
          */
         const val DEFAULT_OFFLINE_READY_TIMEOUT_MS: Long = 10_000
+
+        /**
+         * How many times a transiently-failed piece is retried before the read
+         * falls back.
+         *
+         * Two, not more. Each retry costs the user silence, and the offline voice
+         * is already a working fallback — so the budget is sized to ride out a blip
+         * (a 502, a dropped socket, an empty 200) rather than to keep a user
+         * waiting through a backend that is genuinely down. Three attempts total
+         * covers the common case where the first retry lands while the backend is
+         * still recovering.
+         */
+        const val DEFAULT_MAX_RETRIES: Int = 2
+
+        /**
+         * Base delay before the first retry, doubled for each subsequent one.
+         *
+         * 400 ms then 800 ms: short enough that a recovered backend is invisible
+         * to the listener, long enough that a retry is not simply a second request
+         * arriving during the same outage.
+         */
+        const val DEFAULT_RETRY_BASE_DELAY_MS: Long = 400
     }
 }

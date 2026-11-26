@@ -78,9 +78,26 @@ def declared_names(path):
     return names
 
 
+def strip_comments(text):
+    """Remove block and line comments before scanning for references.
+
+    A KDoc link such as ``[SpeechService]`` is documentation, not a dependency:
+    the file compiles without the class it names. Counting it as a reference
+    pulled pure-JVM files out of scope purely because their comments mentioned an
+    Android-bound class — which is how ``NotificationText`` (a pure function over
+    strings and an enum) was excluded from the JVM job it belongs in.
+
+    String literals are left alone: a class name inside a string is rare, and
+    stripping strings would need a real lexer to avoid mangling escapes.
+    """
+    text = re.sub(r"/\*.*?\*/", " ", text, flags=re.DOTALL)
+    text = re.sub(r"//[^\n]*", " ", text)
+    return text
+
+
 def references(path, names):
     with open(path, encoding="utf-8") as fh:
-        text = fh.read()
+        text = strip_comments(fh.read())
     hits = set()
     for name in names:
         pattern = r"(?<![A-Za-z0-9_])" + re.escape(name) + r"(?![A-Za-z0-9_])"

@@ -25,8 +25,23 @@ sealed class SynthesisResult {
         val engineLabel: String?,
     ) : SynthesisResult()
 
-    /** [reason] is safe to surface to the user. */
-    class Failure(val reason: String) : SynthesisResult()
+    /**
+     * [reason] is safe to surface to the user.
+     *
+     * [transient] says whether asking again could plausibly succeed. It exists
+     * because the two kinds of failure need opposite handling: a 502 or a dropped
+     * socket is worth retrying, while a malformed URL or a 400 will fail
+     * identically every time and retrying it only delays the fallback the user
+     * needs. Without this distinction the engine had no retry at all — a single
+     * transient blip mid-passage dropped the rest of the read to the offline voice.
+     *
+     * Defaults to `false` so a failure that does not say otherwise is treated as
+     * permanent: retrying something that cannot succeed is the worse error.
+     */
+    class Failure(
+        val reason: String,
+        val transient: Boolean = false,
+    ) : SynthesisResult()
 }
 
 /**
@@ -100,7 +115,13 @@ class OkHttpTtsTransport(
             // previous implementation never closed it, leaking connections.
             client.newCall(request).execute().use { response ->
                 if (!response.isSuccessful) {
-                    return@use SynthesisResult.Failure("Backend returned HTTP ${response.code}")
+                    // 5xx and 429 are the server saying "not now"; 4xx is the server
+                    // saying "not like that". Only the first is worth asking again.
+                    val retryable = response.code >= 500 || response.code == 429
+                    return@use SynthesisResult.Failure(
+                        reason = "Backend returned HTTP ${response.code}",
+                        transient = retryable,
+                    )
                 }
 
                 val contentType = response.header("Content-Type")
@@ -110,7 +131,14 @@ class OkHttpTtsTransport(
 
                 val bytes = response.body?.bytes()
                 if (bytes == null || bytes.isEmpty()) {
-                    return@use SynthesisResult.Failure("Backend returned empty audio")
+                    // An empty 200 is a synthesis that produced nothing. It is
+                    // transient: the same text through the same engine usually
+                    // succeeds on a second attempt, and the alternative is dropping
+                    // the rest of the passage to the offline voice over one blip.
+                    return@use SynthesisResult.Failure(
+                        reason = "Backend returned empty audio",
+                        transient = true,
+                    )
                 }
 
                 SynthesisResult.Success(
@@ -120,7 +148,11 @@ class OkHttpTtsTransport(
                 )
             }
         } catch (e: Exception) {
-            SynthesisResult.Failure(describeFailure(e))
+            // A transport-level exception is the definition of transient: the
+            // request never got an answer, so nothing about the request itself is
+            // known to be wrong. A malformed URL is caught above and never reaches
+            // here, which is why this can be unconditional.
+            SynthesisResult.Failure(describeFailure(e), transient = true)
         }
     }
 
