@@ -166,7 +166,7 @@ class PlatformFallbackEngineTest {
         assertTrue(outcome is NarrationOutcome.Failure)
         val row = repo.narrations().single()
         assertEquals(NarrationStatus.FAILED, row.status)
-        assertTrue("a failed narration must carry a reason", !row.failureReason.isNullOrBlank())
+        assertTrue("a failed narration must carry a reason", !row.errorReason.isNullOrBlank())
     }
 
     @Test
