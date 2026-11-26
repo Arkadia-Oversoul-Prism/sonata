@@ -114,11 +114,14 @@ point the decision was made.
 |---|---|
 | Branch | `feat/platform-speech-engine-001` |
 | PR | #8 (draft, not merged) |
-| Commit | `ceb2a6505cc950e4bc4b63a7e1303d0d4ffb43d2` |
+| Commit | `e1042065404e2a237aca127650875227638d22bf` |
 | Base | `feature/sonata-tts-app` @ `49691de` |
 | Tests executed | 299 (was 281; **18 new**) |
 | Tests failing | 0 |
 | Negative control | Fixed 44-byte WAV offset instead of a chunk walk → **suite fails** |
+| CI — Sonata CI (JVM) | ✅ success, run `45787331162` |
+| CI — Build Release APK (unit, lint, assembleRelease, bundleRelease) | ✅ success, run `45787331093` |
+| CI — Instrumented tests (API 34 emulator) | run `45787339148` |
 
 **What was actually broken.** `SpeechModel` was an interface whose only production
 implementation was `UnavailableNativeSession`. `OfflineEngine.resolveModel`
@@ -163,6 +166,32 @@ duration is what the library displays.
 **What is NOT verified.** That a real device's engine produces audio. The adapter
 is tested on the JVM against a double, which proves the wiring and the WAV handling,
 not the platform call. Recorded as **UNVERIFIED**, not claimed.
+
+**Four defects the JVM harness could not see.** All four were found only by running
+the real Gradle pipeline on GitHub Actions, and all four would have shipped:
+
+1. `EngineFactory` did not compile — `SonataRepository` passed where `SonataStore`
+   was expected. The file imports `android.content.Context`, so `ci/scope.py`
+   excludes it and never compiled it.
+2. `PlatformFallbackEngineTest` did not compile — `failureReason` does not exist;
+   the field is `errorReason`. The test references `OfflineEngine`, which is
+   excluded, so the test was excluded too.
+3. The JVM job compiled against **96-byte files**. `repo1.maven.org` rate-limits
+   shared runner IPs and answers with a short error page under HTTP 200, which
+   `curl -sSLO` writes to disk as if it were a jar. kotlinc then failed with
+   unresolved references and the harness reported `COMPILE FAILED` — a code defect
+   that did not exist. Fixed in two places: the workflow fetches from
+   `repo.maven.apache.org` and validates every jar (non-empty, above a per-jar
+   minimum, starting with `PK`), and `ci/run-ci.sh` preflights the classpath and
+   exits 2 with `RESULT=TOOLCHAIN_BROKEN`.
+4. A jar was saved under the wrong name — `annotation-jvm-1.7.1.jar` on disk while
+   `CP_JARS` looks for `annotation-1.7.1.jar`. The new preflight reported
+   `MISSING JAR` instead of letting kotlinc fail obscurely.
+
+**The lesson, recorded because it is the point.** An excluded file is an unverified
+file. The JVM harness verifies 299 tests but cannot see what it excludes, and two
+compile errors lived in exactly that blind spot. The Gradle job is the only thing
+that compiles the whole tree, which is why it must stay non-optional.
 
 **Still missing.** No neural model (the quality tier); no cloned voice (the platform
 engine has no adapter stage, so a cloned request is refused rather than downgraded);
