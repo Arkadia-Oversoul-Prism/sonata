@@ -139,6 +139,9 @@ that assert the split happens. The split is therefore **tested**. It has not bee
 | L18 | No localisation beyond English |
 | L19 | No crash reporting, by design — which also means no field diagnostics |
 | L20 | The floating overlay's behaviour under battery optimisation is unknown |
+| L21 | The retry backoff and the notification ticker are timing-dependent and are proven only on the JVM scheduler and the emulator, never on hardware |
+| L22 | `normaliseNumbers` deliberately does not spell out arbitrary numbers as words; "21st" is left as digits because a full number-to-words implementation is locale-dependent and a wrong expansion is worse than the digits |
+| L23 | The year rule is bounded 1900–2099, so a year like 1066 is read as digits. This is a deliberate trade: the wider range split prices like `1250` into `12 50` |
 
 ---
 
@@ -161,9 +164,13 @@ gaps.
 ## 5. Summary for a reviewer
 
 The candidate is **source-complete for the platform-independent logic** and
-**functionally incomplete as a product**. The logic is tested (281 tests, 0
-failures) and the privacy policy is now genuinely enforced. The product cannot
+**functionally incomplete as a product**. The logic is tested (405 tests, 0
+failures) and the privacy policy is genuinely enforced. The product cannot
 speak, cannot be built into an APK here, and has never run on a device.
 
 That is the honest position, and it is the position the verdict in
 `SONATA_PRODUCTION_HANDOFF.md` is computed from.
+
+**Updated 2026-11-26 (PR #7).** The test count above was 281 when this section
+was written; it is now 405. The verdict is unchanged, because the count was never
+what the verdict rested on — L1 and L4 are.

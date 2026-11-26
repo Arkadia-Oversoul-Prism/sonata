@@ -52,6 +52,8 @@ class TtsEngineOnlineTest {
         backendUrl: String = "https://example.test",
         preferOnline: Boolean = true,
         prefetchDepth: Int = 0,
+        maxRetries: Int = TtsEngine.DEFAULT_MAX_RETRIES,
+        retryBaseDelayMs: Long = TtsEngine.DEFAULT_RETRY_BASE_DELAY_MS,
     ): Harness {
         val transport = FakeTransport(result = result, delayMs = delayMs)
         val player = FakeAudioPlayer()
@@ -73,6 +75,8 @@ class TtsEngineOnlineTest {
             // Deterministic fetch order: the engine fetches one piece at a time as
             // the previous one finishes, so a test can assert on the sequence.
             prefetchDepth = prefetchDepth,
+            maxRetries = maxRetries,
+            retryBaseDelayMs = retryBaseDelayMs,
         )
         engine.listener = listener
         return Harness(engine, transport, player, offline, listener, settings, cacheDir)

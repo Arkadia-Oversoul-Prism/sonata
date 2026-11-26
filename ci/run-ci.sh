@@ -78,6 +78,15 @@ CP_JARS="$CP_JARS:$LIB/okhttp-4.12.0.jar:$LIB/okio-jvm-3.6.0.jar:$LIB/json-20240
 
 echo "commit_sha=$SHA tree_sha=$TREE dirty_files=$DIRTY"
 
+# --------------------------------------------------------------- preflight
+# A tracked bytecode cache is a stale artifact that no reviewer reads and every
+# checkout rewrites. Judged before the jobs so a red run is red for the tree and
+# not only for the sources it compiles.
+if ! python3 ci/hygiene.py; then
+  echo "SUMMARY preflight=FAIL"
+  exit 1
+fi
+
 # ------------------------------------------------------------------ job 1
 SCOPE=$(python3 ci/scope.py)
 MAIN=$(echo "$SCOPE" | awk '$1=="MAIN"{print $2}')

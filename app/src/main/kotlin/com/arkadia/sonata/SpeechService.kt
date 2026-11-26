@@ -40,6 +40,21 @@ class SpeechService : Service() {
     private lateinit var prefs: Prefs
     private lateinit var mediaSession: MediaSessionCompat
 
+    /**
+     * Refreshes the notification while a read is playing.
+     *
+     * The notification used to be rebuilt only on start/pause/resume/complete, so
+     * its progress line was computed once and then frozen — a listener opening the
+     * shade mid-read saw the position from the moment the read began. This ticker
+     * is what keeps it truthful.
+     *
+     * 2 s rather than the UI's 400 ms: the shade is read at a glance, a
+     * notification update is a cross-process binder call, and a percentage that
+     * moves every two seconds is already more responsive than the eye needs.
+     */
+    private val notifTicker = android.os.Handler(android.os.Looper.getMainLooper())
+    private var notifTickerRunning = false
+
     private var currentText  = ""
     private var currentLabel = "SONATA"
 
@@ -144,9 +159,40 @@ class SpeechService : Service() {
     override fun onBind(intent: Intent): IBinder = binder
 
     override fun onDestroy() {
+        stopNotifTicker()
         tts.shutdown()
         mediaSession.release()
         super.onDestroy()
+    }
+
+    /**
+     * Start refreshing the notification while something is playing.
+     *
+     * Idempotent: every start path calls it, and a second call while the ticker
+     * is already running must not start a second one.
+     */
+    private fun startNotifTicker() {
+        if (notifTickerRunning) return
+        notifTickerRunning = true
+        notifTicker.post(object : Runnable {
+            override fun run() {
+                if (!notifTickerRunning) return
+                // Only while genuinely playing: a paused read has a fixed
+                // position, and rewriting the same notification every two
+                // seconds would be pure waste.
+                if (tts.isPlaying) {
+                    updateNotification(playing = true)
+                    notifTicker.postDelayed(this, NOTIF_TICK_MS)
+                } else {
+                    notifTickerRunning = false
+                }
+            }
+        })
+    }
+
+    private fun stopNotifTicker() {
+        notifTickerRunning = false
+        notifTicker.removeCallbacksAndMessages(null)
     }
 
     // ── Public control surface (used when bound) ───────────────────────────
@@ -192,11 +238,13 @@ class SpeechService : Service() {
             currentEngine = engine
             fellBackOffline = engine == TtsEngineKind.OFFLINE
             updateNotification(playing = true)
+            startNotifTicker()
             clients.forEach { it.onStart() }
         }
 
         override fun onPaused(engine: TtsEngineKind) {
             currentEngine = engine
+            stopNotifTicker()
             updateNotification(playing = false)
             clients.forEach { it.onPause() }
         }
@@ -204,12 +252,14 @@ class SpeechService : Service() {
         override fun onResumed(engine: TtsEngineKind) {
             currentEngine = engine
             updateNotification(playing = true)
+            startNotifTicker()
             clients.forEach { it.onResume() }
         }
 
         override fun onComplete() {
             currentEngine = null
             lastError = null
+            stopNotifTicker()
 
             // A finished preview is not a finished read. Reporting it as one would
             // tell the main screen the passage had been read, which it has not, and
@@ -232,6 +282,7 @@ class SpeechService : Service() {
         override fun onError(msg: String, fellBackTo: TtsEngineKind?) {
             // Surface the failure instead of swallowing it and dying silently.
             lastError = msg
+            stopNotifTicker()
             fellBackTo?.let {
                 currentEngine = it
                 fellBackOffline = true
@@ -296,30 +347,19 @@ class SpeechService : Service() {
                 .build()
         )
 
-        val preview = currentText.replace(Regex("\\s+"), " ").trim().let {
-            if (it.length <= 72) it else it.take(72) + "…"
-        }
-        val engineNote = when (currentEngine) {
-            TtsEngineKind.ONLINE  -> "Neural voice"
-            TtsEngineKind.OFFLINE -> if (fellBackOffline) "Offline voice (backend unavailable)"
-                                     else "Offline voice"
-            null                  -> null
-        }
+        val preview = NotificationText.preview(currentText)
+        val engineNote = NotificationText.voice(currentEngine, fellBackOffline)
         // The position is worth showing: a long read is the normal case now, and
         // "how far in am I?" is the question the shade is opened to answer.
-        val positionNote = if (tts.isBufferingNext) {
-            "Buffering…"
-        } else {
-            val total = tts.totalChars
-            if (total > 0 && tts.isPlaying) {
-                val percent = ((tts.spokenChars.toFloat() / total) * 100).toInt().coerceIn(0, 100)
-                if (tts.segmentCount > 1) "Part ${tts.segmentIndex} of ${tts.segmentCount} · $percent%"
-                else "$percent%"
-            } else {
-                null
-            }
-        }
-        val body = listOfNotNull(preview.ifBlank { null }, positionNote, engineNote)
+        val positionNote = NotificationText.position(
+            spokenChars = tts.spokenChars,
+            totalChars = tts.totalChars,
+            segmentIndex = tts.segmentIndex,
+            segmentCount = tts.segmentCount,
+            buffering = tts.isBufferingNext,
+            playing = playing,
+        )
+        val body = listOfNotNull(preview, positionNote, engineNote)
             .joinToString(" · ")
 
         return NotificationCompat.Builder(this, SonataApp.CHANNEL_ID)
@@ -368,5 +408,8 @@ class SpeechService : Service() {
         const val EXTRA_LABEL   = "label"
         /** Character offset to begin reading from; 0 (the default) reads it all. */
         const val EXTRA_FROM_CHAR = "fromChar"
+
+        /** How often the notification's progress line is refreshed while playing. */
+        const val NOTIF_TICK_MS = 2_000L
     }
 }

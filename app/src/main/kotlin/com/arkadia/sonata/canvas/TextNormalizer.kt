@@ -33,9 +33,11 @@ object TextNormalizer {
         text = stripHtml(text)
         text = stripMarkdown(text)
         text = flattenTables(text)
+        text = normaliseCase(text)
         text = stripEmoji(text)
         text = normaliseSymbols(text)
         text = expandAbbreviations(text)
+        text = normaliseNumbers(text)
         text = normaliseWhitespace(text)
         return text.trim()
     }
@@ -114,6 +116,83 @@ object TextNormalizer {
         return out.toString()
     }
 
+    // ── Case ─────────────────────────────────────────────────────────────────
+
+    /**
+     * Speak an all-caps heading as words instead of spelling it out.
+     *
+     * A heading set in capitals ("INTRODUCTION", "THE END") is typography, not
+     * speech. Engines that treat an all-caps token as an initialism read it letter
+     * by letter, so the listener hears "I N T R O D U C T I O N". Sentence-casing
+     * such a line is what makes it sound read aloud.
+     *
+     * The rule is deliberately narrow, because a wrong rewrite is worse than a
+     * shouted word:
+     *
+     *  - Only a **whole line** is considered. Inline capitals are emphasis inside a
+     *    sentence, and the sentence around them supplies the reading context, so
+     *    they are left alone.
+     *  - A line carrying any lowercase letter is prose, and is left alone.
+     *  - A line made only of known acronyms ("NASA API") is left alone: those are
+     *    either spoken correctly as words or meant to be spelled.
+     *  - An acronym inside a shouted line keeps its case ("THE NASA STORY" ->
+     *    "The NASA story"), so the rewrite never destroys a name.
+     */
+    fun normaliseCase(text: String): String =
+        text.lines().joinToString("\n") { line ->
+            if (isShoutedHeading(line)) sentenceCase(line) else line
+        }
+
+    /** Whether [line] is a line that is entirely capitals and not all acronyms. */
+    fun isShoutedHeading(line: String): Boolean {
+        val trimmed = line.trim()
+        if (trimmed.count { it.isLetter() } < 2) return false
+        if (trimmed.any { it.isLetter() && it.isLowerCase() }) return false
+        val words = trimmed.split(Regex("\\s+"))
+            .map { it.dropWhile { c -> !c.isLetter() }.dropLastWhile { c -> !c.isLetter() } }
+            .filter { it.isNotEmpty() }
+        return words.isNotEmpty() && words.any { it.uppercase() !in ACRONYMS }
+    }
+
+    /** Lowercase [line], capitalise its first word, and keep known acronyms. */
+    fun sentenceCase(line: String): String {
+        val out = StringBuilder(line.length)
+        var firstWord = true
+        var i = 0
+        while (i < line.length) {
+            val c = line[i]
+            if (!c.isLetter()) {
+                out.append(c)
+                i++
+                continue
+            }
+            val start = i
+            while (i < line.length && (line[i].isLetter() || line[i].isDigit() || line[i] == '-' || line[i] == '\'')) i++
+            val word = line.substring(start, i)
+            val kept = word.uppercase() in ACRONYMS
+            when {
+                kept -> out.append(word)
+                firstWord -> out.append(word.lowercase().replaceFirstChar { it.uppercaseChar() })
+                else -> out.append(word.lowercase())
+            }
+            firstWord = false
+        }
+        return out.toString()
+    }
+
+    /**
+     * The acronyms a rewrite must not flatten.
+     *
+     * Kept explicit rather than inferred: a heuristic that guesses "this looks like
+     * an acronym" turns "US" into "us" and changes what a sentence means.
+     */
+    private val ACRONYMS = setOf(
+        "AI", "API", "ARKANA", "CPU", "DOCX", "EU", "FAQ", "GPU", "HTML", "HTTP",
+        "HTTPS", "ID", "JNI", "JSON", "M4A", "MIE", "MP3", "N-ATLAS", "NASA", "OK",
+        "OS", "PCM", "PDF", "RAM", "SDK", "STT", "TBD", "TTS", "UK", "URL", "US",
+        "WAV",
+    )
+
     // ── Emoji ────────────────────────────────────────────────────────────────
 
     /**
@@ -179,6 +258,13 @@ object TextNormalizer {
         t = t.replace(Regex("(?<=\\d)\\s*/\\s*(?=\\d)"), " per ")
         t = t.replace(Regex("\\s*/\\s*"), " or ")
         // Currency and units that are read as symbols.
+        //
+        // The dollar sign was missing from this list while the euro, pound and
+        // yen were present, so "$1,250" reached the engine as a bare symbol and
+        // was read as nothing at all — the amount simply vanished from the
+        // narration. It is placed before the digit so the number that follows is
+        // still normalised by [normaliseNumbers].
+        t = t.replace("\$", " dollars ")
         t = t.replace("\u20AC", " euros ")
         t = t.replace("\u00A3", " pounds ")
         t = t.replace("\u00A5", " yen ")
@@ -228,6 +314,93 @@ object TextNormalizer {
         "approx." to "approximately",
         "dept." to "department",
         "govt." to "government",
+    )
+
+    // ── Numbers ───────────────────────────────────────────────────────────────
+
+    /**
+     * Make numbers read the way a person says them.
+     *
+     * Three rules, each fixing something the engine gets audibly wrong:
+     *
+     *  - **Thousands separators.** "1,250" is read as "one comma two five zero"
+     *    by engines that treat the comma as punctuation. The comma is removed so
+     *    the digits are read as one number.
+     *  - **Ordinals.** "1st", "2nd", "3rd" are read as "one s t" by engines that
+     *    do not recognise the suffix. The small ones are spelled out.
+     *  - **Years.** "2026" is read "two thousand and twenty six" by some engines.
+     *    Splitting it into two pairs gives "twenty twenty six", which is what a
+     *    person says.
+     *
+     * Deliberately conservative: it does not attempt to spell out arbitrary
+     * numbers as words. That is a large, locale-dependent problem, and a wrong
+     * expansion is worse than a number the engine reads correctly on its own.
+     */
+    fun normaliseNumbers(text: String): String {
+        var t = text
+
+        // Thousands separators: 1,250,000 -> 1250000. Only between digits, so a
+        // genuine comma in a list ("3, 4 and 5") is untouched.
+        //
+        // The lookahead is `\d{3}` with no trailing guard, and the replacement
+        // runs repeatedly. A single pass with `(?!\d)` after the group only
+        // matched the *last* group of a multi-group number, so "1,250,000"
+        // became "1,250000" and then "1250000" only by luck of ordering — while
+        // "1,250" became "12 50", because the comma was consumed and the space
+        // that followed the earlier `\s*` rule was left behind. Removing one
+        // separator per pass, repeatedly, is what makes every group behave the
+        // same way.
+        while (Regex("(?<=\\d),(?=\\d{3})").containsMatchIn(t)) {
+            t = t.replace(Regex("(?<=\\d),(?=\\d{3})"), "")
+        }
+
+        // Ordinals. Only the small ones: "21st" would need a full
+        // number-to-words implementation, and the engine reads "21" correctly.
+        for ((digits, word) in ORDINALS) {
+            t = t.replace(Regex("(?<![\\d.])" + digits + "(?![\\d])"), word)
+        }
+
+        // Years: 2026 -> "20 26", which engines read as "twenty twenty six".
+        //
+        // Bounded to 1900-2099, not 1000-2099. A bare four-digit number in the
+        // wider range is far more often a quantity than a year — "1,250" is a
+        // price, and splitting it produced "12 50", which is not a number at
+        // all. The narrower window still covers every year a reader is likely to
+        // meet, and the cost of the restriction is that a year like 1066 is read
+        // as digits, which is correct rather than wrong.
+        //
+        // Not adjacent to other digits or a decimal point, so "3.2026" and
+        // "12026" are left alone.
+        t = t.replace(Regex("(?<![\\d.])(19[0-9]{2}|20[0-9]{2})(?![\\d.])")) { m ->
+            val year = m.value
+            val hi = year.substring(0, 2)
+            val lo = year.substring(2)
+            // A year ending in 00 is said "nineteen hundred", not "nineteen zero
+            // zero", so the trailing pair is only split when it is not "00".
+            if (lo == "00") "$hi hundred" else "$hi $lo"
+        }
+
+        return t
+    }
+
+    /**
+     * The ordinals worth spelling out.
+     *
+     * Only the irregular ones and the small regular ones. "21st" is left as
+     * digits because "twenty first" would need a full number-to-words
+     * implementation, and the engine reads "21" correctly on its own.
+     */
+    private val ORDINALS = listOf(
+        "1st" to "first",
+        "2nd" to "second",
+        "3rd" to "third",
+        "4th" to "fourth",
+        "5th" to "fifth",
+        "6th" to "sixth",
+        "7th" to "seventh",
+        "8th" to "eighth",
+        "9th" to "ninth",
+        "10th" to "tenth",
     )
 
     // ── Whitespace ───────────────────────────────────────────────────────────

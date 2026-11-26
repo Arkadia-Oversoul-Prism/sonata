@@ -204,3 +204,194 @@ This is recorded as a fact, not a defect to be hidden. It is the root cause of B
 | Stage 7a review | `webpages/sonata-stage7a-review/index.html` | pre-merge tree |
 | Historical record | `docs/evolution/E0..E11` | as written |
 | Reproducible build info | `docs/SONATA_PRODUCTION_HANDOFF.md` §4 | `a102db4` |
+
+---
+
+## 6. Post-merge evolution — PR #7 (2026-11-26)
+
+**Append-only.** Sections 1–5 above are unchanged. This section records what
+happened after PR #5 was merged, and where it contradicts an earlier entry it
+says so rather than editing it.
+
+### 6.1 What changed in the repository before this entry
+
+| Fact | Value |
+|---|---|
+| PR #5 merged into the default branch | `49691de5b57dc10b4434bd9795b04dddb96935fe` |
+| Default branch | `feature/sonata-tts-app` |
+| PR #6 merged (device capability contract) | `53a60c05e8ffd5f42dba24518a8a1e724df5bdd4` on `integration/stage7b-prod-candidate` |
+| Open PRs at the start of this entry | none |
+| Open issues | #1 only |
+
+**This contradicts §2's Stage 7b row**, which records `a102db4` as the candidate.
+`a102db4` was the candidate *at the time*; the tree that actually shipped is
+`49691de`. The earlier row is left as written.
+
+### 6.2 Baseline established for this entry
+
+| Field | Value |
+|---|---|
+| Base commit | `49691de5b57dc10b4434bd9795b04dddb96935fe` |
+| Working tree | clean |
+| Tests at baseline | **281** (112 app core + 169 narration core) |
+| Tests failing at baseline | 0 |
+| Android SDK in this environment | absent — Gradle build not runnable locally |
+
+### 6.3 What this entry changed
+
+Branch `feat/playback-retry-and-truthful-progress`, candidate
+**`3f712ff34795c11dcdd3e73219110ea2ab36c245`**, PR #7 (draft).
+
+| # | Change | Defect it closes | Negative control |
+|---|---|---|---|
+| 1 | `SynthesisResult.Failure` carries a `transient` flag; engine retries twice with exponential backoff | **There was no retry at all.** One 502 / dropped socket / empty 200 mid-passage dropped the rest of the read to the offline voice | Disabling the retry fails 3 tests |
+| 2 | Notification text extracted to `NotificationText`; `SpeechService` refreshes it on a 2 s ticker | **The progress line was frozen.** It was computed once at read start and never rewritten, so a long read showed `Part 1 of 12 · 0%` throughout | Freezing the percentage fails 4 tests |
+| 3 | `$` added to the currency list; `normaliseNumbers` added | **`$1,250` lost its unit entirely** — `$` was absent while €/£/¥ were present. Thousands separators, small ordinals and years also read badly | Covered by 12 new tests |
+| 4 | `ci/scope.py` strips comments before scanning for references | A KDoc link like `[SpeechService]` counted as a code dependency, excluding pure-JVM files from the JVM job — `NotificationText` was excluded from the job that should test it | 112 previously-excluded tests now run |
+
+### 6.4 Two bugs in my own first cut, caught by the tests written for it
+
+Recorded because the pattern matters: the tests were written before the code was
+trusted, and they found real errors in it.
+
+1. The thousands-separator regex only matched the **last** group of a
+   multi-group number, so `1,250` became `12 50`.
+2. The year rule was bounded 1000–2099, so a **price** of `1250` was split into
+   `12 50`. Narrowed to 1900–2099: a bare four-digit number in the wider range
+   is far more often a quantity than a year.
+
+### 6.5 Test and CI evidence at `3f712ff`
+
+| Evidence | Result |
+|---|---|
+| Local harness `./ci/run-ci.sh` | 405 tests, both jobs exit 0 |
+| Job 1 (app core) | 236 tests |
+| Job 2 (narration core) | 169 tests |
+| GitHub Actions — Sonata CI (`45730577830`) | **success** |
+| GitHub Actions — Build Sonata APK, Build Release APK (`45730640054`) | **success** |
+| GitHub Actions — Build Sonata APK, Instrumented tests API 34 (`45730577849`) | **success** |
+
+The instrumented suite passing matters: it is the only check that exercises the
+Android framework, and it is where the `INTERNET`-in-debug-overlay defect was
+caught in the previous entry.
+
+### 6.6 What this entry does NOT change
+
+- **The neural tier is still absent.** No model binary, no JNI bridge, no
+  `assets/`, no `jniLibs/`. `UnavailableNativeSession` is still what a build
+  without the native library gets. **A10 remains the blocking item.**
+- **No device validation.** Gates G1–G6 and S0-1..S0-4: still 0 of 6 executed.
+  The retry backoff and the notification ticker are both timing-dependent and are
+  proven only on the JVM scheduler and the emulator, not on hardware.
+- **No signing.** No keystore, so no publishable APK/AAB.
+- **No merge, release or deploy.** PR #7 is a draft.
+
+### 6.7 Next deterministic task
+
+The engine. Everything else in this repository is supporting work for a product
+that cannot yet perform its one function. Concretely: bundle a model, implement
+the JNI bridge behind `NativeSession`, and verify inference on a device. Until
+that exists, no amount of P0/P1 polish changes the verdict.
+
+---
+
+## 7. Tracked bytecode cache removed, and the harness now judges the tree
+
+### 7.1 Defect
+
+`ci/__pycache__/scope.cpython-311.pyc` (7,011 bytes) was committed on this
+branch. `ci/scope.py` is imported by the harness, so running it writes
+`__pycache__`; the cache produced by that import was staged along with the
+source. Nothing in the tree judged it, so it would have shipped with the
+candidate.
+
+This is the repository's own defect class, one level down from Stage 7a's B1
+finding: a tracked derived artifact is an artifact no reviewer reads and every
+checkout rewrites, and a stale `.pyc` can shadow the source it claims to be
+compiled from.
+
+### 7.2 Repair and guard
+
+| Change | Purpose |
+|---|---|
+| `.gitignore` — `__pycache__/`, `*.pyc`, `*.pyo` | the cache can no longer be staged by habit |
+| `git rm --cached ci/__pycache__/scope.cpython-311.pyc` | the committed artifact leaves the tree |
+| `ci/hygiene.py` (new, stdlib only) | fails when any **tracked** path is a bytecode cache; skips with a note outside a git checkout, so an exported tarball is not misjudged |
+| `ci/run-ci.sh` preflight | runs the guard before job 1, so a red run is red for the tree and not only for the sources it compiles |
+
+### 7.3 Evidence (this sandbox: `python3` only, no JVM)
+
+| Check | Result |
+|---|---|
+| `python3 ci/hygiene.py` on the pre-repair tree | exit **1**, names `ci/__pycache__/scope.cpython-311.pyc` |
+| same, after untracking | exit **0**, `no tracked bytecode cache` |
+| negative control — `git add -f ci/__pycache__/probe.cpython-311.pyc` | exit **1**, names the probe |
+| negative control through the harness | `SUMMARY preflight=FAIL`, harness exit **1** |
+| harness after removing the probe | preflight passes, proceeds to job 1 |
+
+The pre-repair run is a *live* control on the real file, not a fixture: the
+guard was executed against the tree that carried the defect before it was
+repaired.
+
+### 7.4 Not claimed
+
+- **Job 1 reports `COMPILE FAILED` in this sandbox** because `kotlinc` and `java`
+  are absent here. That is the toolchain absence `ci/run-ci.sh` already documents
+  (`android_sdk=ABSENT`), not a source defect. The authoritative JVM and APK
+  evidence remains GitHub Actions.
+- No source file, test assertion, or neural-tier claim changed. **A10 (the
+  engine) remains the blocking item** and this entry does not touch it.
+
+---
+
+## 8. S1 — shouted headings, and a harness that ran here (append-only)
+
+**Date:** 2026-11-26
+**Base:** `49691de5b57dc10b4434bd9795b04dddb96935fe` (branch `feat/playback-retry-and-truthful-progress`, PR #7)
+
+### 8.1 The defect
+
+`TextNormalizer` had no case rule. A heading set in capitals reached the engine as
+capitals, and an engine that treats an all-caps token as an initialism reads it
+letter by letter — `INTRODUCTION` is heard as "I N T R O D U C T I O N". This is
+the *"uppercase headings spoken unnaturally"* item in the S1 contract, and it was
+the only cleaning rule in the S1 list with no implementation.
+
+### 8.2 The rule
+
+`normaliseCase` runs on each line after markup removal and before the symbol rules.
+It rewrites a line only when the line is **entirely capitals** and is **not made
+only of known acronyms**; the rewrite lowercases the line, capitalises its first
+word, and restores any known acronym (`THE NASA STORY` -> `The NASA story`).
+Prose, inline capitals, and acronym-only lines are untouched. The acronym list is
+explicit because a heuristic that guesses "this looks like an acronym" turns `US`
+into `us` and changes what a sentence means.
+
+### 8.3 Evidence (run in this sandbox)
+
+A JDK and the Kotlin compiler were provisioned here (Temurin `17.0.21.1`,
+kotlinc `1.9.24`, jars from `repo.maven.apache.org` and Google Maven), so the
+tracked harness ran locally rather than only in GitHub Actions. This supersedes the
+"this sandbox: `python3` only, no JVM" note in §7.3 **for this entry**; §7.3 stays
+as written.
+
+| Check | Command | Result |
+|---|---|---|
+| Harness on PR #7 head before the change | `bash ci/run-ci.sh --check` | `total_tests=405`, job1/job2 exit 0 |
+| Harness with the rule | `bash ci/run-ci.sh --check` | `total_tests=418`, job1/job2 exit 0 |
+| **Negative control** — `normaliseCase` call removed | `bash ci/run-ci.sh` | `Tests run: 249, Failures: 5` |
+| Rule restored, harness re-run | `bash ci/run-ci.sh --check` | `total_tests=418`, 0 failures |
+
+The 418 - 405 = 13 delta is exactly the new `TextNormalizerCaseTest` nodes
+(`ci/scope.py` on this branch includes the file; it is not in the excluded set).
+
+### 8.4 Not claimed
+
+- **Not device-validated.** Whether a particular vendor engine spelled the heading
+  is a device observation that was not made here; the rule is verified as a text
+  transformation only.
+- **Inline capitals are deliberately left alone.** Emphasis inside a sentence is
+  read with its surrounding words, and rewriting it would change authored copy
+  without addressing the heading defect.
+- No engine, model, playback, or UI change. `EngineFactory` is still not called
+  from the UI, which remains the next slice.
