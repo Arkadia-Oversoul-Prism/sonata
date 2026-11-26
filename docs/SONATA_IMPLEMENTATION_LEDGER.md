@@ -108,6 +108,66 @@ point the decision was made.
 | Tests executed | 112 (app core) + 169 (narration core) = **281** |
 | Tests failing | 0 |
 
+### Stage L1 — Offline speech engine (2026-11-26)
+
+| Field | Value |
+|---|---|
+| Branch | `feat/platform-speech-engine-001` |
+| PR | #8 (draft, not merged) |
+| Commit | `ceb2a6505cc950e4bc4b63a7e1303d0d4ffb43d2` |
+| Base | `feature/sonata-tts-app` @ `49691de` |
+| Tests executed | 299 (was 281; **18 new**) |
+| Tests failing | 0 |
+| Negative control | Fixed 44-byte WAV offset instead of a chunk walk → **suite fails** |
+
+**What was actually broken.** `SpeechModel` was an interface whose only production
+implementation was `UnavailableNativeSession`. `OfflineEngine.resolveModel`
+therefore returned null and every narration failed with *"no speech model is
+installed"*. Separately, `OfflineEngine` was constructed **only in tests** — the
+app's playback path (`TtsEngine` → `AndroidOfflineVoice`) streams to the speaker
+and saves nothing. Two independent gaps, either of which alone made a saved
+narration impossible.
+
+**What was built.**
+
+| File | Role |
+|---|---|
+| `export/WavReader.kt` | Parses a WAV by walking its chunk list |
+| `engine/PlatformSpeechModel.kt` | Pure-JVM adapter: WAV→PCM, failure mapping, version attribution |
+| `AndroidPlatformSynthesis.kt` | The `synthesizeToFile` binding, with a bounded wait |
+| `EngineFactory.kt` | Constructs the engine in production |
+| `engine/OfflineEngine.kt` | Fallback tier; honest failure messages |
+
+**Engine and model selected.** The Android platform `TextToSpeech` engine via
+`synthesizeToFile`. **No model is bundled** — this is the fallback tier, and it
+needs no model file. Licence: the platform engine is part of Android (Apache-2.0 /
+device vendor). No third-party model licence applies because no third-party model
+is present. Bundling Kokoro or Piper is a licensing and provenance decision for the
+repository owner and was deliberately not taken here.
+
+**Why `synthesizeToFile` and not `speak`.** `speak` streams to the speaker and
+produces nothing that can be saved, exported or replayed. `synthesizeToFile` is the
+only platform API that renders to a file, which is what the library path needs.
+`AndroidOfflineVoice` already used `speak` for playback; both are needed and they
+are different APIs.
+
+**Why the WAV is parsed rather than assumed.** The platform engine may emit
+`LIST`/`fact` chunks before `data`. A fixed 44-byte offset would read metadata as
+audio — a click at the start of every narration. The negative control above is
+exactly that bug, and it fails the suite.
+
+**Why the sample rate comes from the file.** The engine picks its own rate. A
+descriptor that disagreed with the audio would make every duration wrong, and
+duration is what the library displays.
+
+**What is NOT verified.** That a real device's engine produces audio. The adapter
+is tested on the JVM against a double, which proves the wiring and the WAV handling,
+not the platform call. Recorded as **UNVERIFIED**, not claimed.
+
+**Still missing.** No neural model (the quality tier); no cloned voice (the platform
+engine has no adapter stage, so a cloned request is refused rather than downgraded);
+`EngineFactory` is not yet called from the UI, so no screen reaches `narrate()`.
+
 ---
 
 ## 3. What Stage 7b changed, and why

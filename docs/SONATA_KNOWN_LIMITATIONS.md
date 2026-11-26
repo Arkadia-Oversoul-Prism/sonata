@@ -11,17 +11,38 @@ limitation is a release blocker it is marked **BLOCKER**.
 
 ## 1. Blocking limitations
 
-### L1 — The app cannot speak **BLOCKER**
+### L1 — The app can speak, but only in the platform voice **PARTIAL**
 
-There is no speech engine. No model binary, no inference runtime, no JNI bridge, no
-`SpeechModel` implementation. `SpeechModel` is an interface; the only implementation
-is `FakeSpeechModel`, which is a test double.
+**Superseded 2026-11-26 by PR #8.** The previous text said there was no speech
+engine at all. That is no longer true, and the correction matters in both
+directions.
 
-**Consequence.** The core function of a text-to-speech reader does not work. This is
-not a risk or a degradation; it is the absence of the product.
+**What now works.** `PlatformSpeechModel` over `AndroidPlatformSynthesis` renders
+speech through the device's own `TextToSpeech` engine via `synthesizeToFile`, and
+`OfflineEngine` uses it as the fallback tier when no neural model is installed.
+`EngineFactory` constructs the engine in production. A device with no model file
+can now produce a saved narration.
 
-**What it would take.** Bundle a model, implement the JNI bridge, implement
-`SpeechModel`, validate on a device.
+**What still does not work.**
+
+1. **No neural model.** Kokoro-82M and Piper are still absent. The app speaks in
+   whatever voice the device's engine provides — which on many devices is a
+   robotic formant synthesiser, not the natural voice the product promises. The
+   quality tier is still missing.
+2. **No cloned voice.** The platform engine has no adapter stage, so a
+   cloned-voice request is refused rather than silently downgraded.
+3. **`EngineFactory` is not called from the UI.** The engine is constructible in
+   production, but no screen invokes `narrate()` yet. The library path exists and
+   is tested; it is not yet reachable by a user tapping a button.
+4. **No device validation.** That a real device's engine produces audio is
+   **UNVERIFIED**. The adapter is tested on the JVM against a double, which proves
+   the wiring and the WAV handling, not the platform call.
+
+**Consequence.** The core function is no longer absent, but it is not yet the
+product: the voice is the device's, not Sonata's, and no UI reaches it.
+
+**What it would take.** Bundle a licensed neural model; call `EngineFactory` from
+the library screen; validate on a device.
 
 ### L2 — No **signed** APK or AAB **BLOCKER for release**
 

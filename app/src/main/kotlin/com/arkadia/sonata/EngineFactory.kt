@@ -1,6 +1,7 @@
 package com.arkadia.sonata
 
 import android.content.Context
+import com.arkadia.sonata.data.RepositoryStore
 import com.arkadia.sonata.data.SonataDatabase
 import com.arkadia.sonata.data.SonataRepository
 import com.arkadia.sonata.engine.DeviceProfile
@@ -47,7 +48,7 @@ object EngineFactory {
     fun create(context: Context): Wired {
         val synthesis = AndroidPlatformSynthesis(context)
         val engine = OfflineEngine(
-            repository = SonataRepository(SonataDatabase.get(context)),
+            repository = RepositoryStore(SonataRepository(SonataDatabase.get(context))),
             fileStore = AppPrivateFileStore(context),
             // No neural model ships yet. The fallback is the active tier.
             registry = InMemoryModelRegistry(emptyList()),
