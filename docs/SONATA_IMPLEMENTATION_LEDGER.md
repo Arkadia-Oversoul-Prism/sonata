@@ -555,3 +555,103 @@ to be stronger than it is.
 **Not claimed.** No device validation. No neural voice. No UI change beyond the label.
 `EngineFactory` is still not called from the UI, so a *saved* narration is still
 unreachable by a user tapping a button — §8.4's next slice is unchanged by this one.
+
+---
+
+### Stage S1b — The progressive-read gate counted requests, not pieces (2026-11-27)
+
+| Field | Value |
+|---|---|
+| Branch | `fix/s1-tier-truth-001` |
+| PR | #9 (draft) |
+| Base | `feature/sonata-tts-app` @ `7c4e6a64e39e34685b06e2e1698cf9eb896b9720` |
+| Parent | `b66932fdd4d5b0728996b811c0fb1edd71903fab` |
+| Candidate | `ba01087e9068a301dd4906a8621a7ce9565835ed` |
+| Changed | 1 file, `app/src/androidTest/.../DeviceProgressiveReadProtocolTest.kt` (+50 / −6) |
+| Instrumented suite | 25 tests, `BUILD SUCCESSFUL` on both runs at the candidate |
+
+#### The defect
+
+`p3_8_the_whole_passage_is_read_not_just_the_opening_piece` ended with
+
+```kotlin
+assertEquals("every piece must be requested exactly once ...", pieces.size, requests.size)
+```
+
+An exact one-to-one between HTTP requests and the passage's pieces. That equality
+does not hold by design, and it failed on the branch's own head:
+
+| Run | Event | Instrumented tests | Result |
+|---|---|---|---|
+| `45926912090` | `push`, `b66932fd` | `failure` | `p3_8 ... expected:<13> but was:<14>` |
+| `45926917172` | `pull_request`, `b66932fd` | `success` | 25 tests, no failure |
+
+Same commit, same workflow, opposite outcome. A gate that reports two verdicts for
+one tree cannot be cited as evidence for either.
+
+#### Why a 14th request is legitimate
+
+`TtsEngine.fetchSegment` retries a piece whose synthesis failed *transiently*, up to
+`DEFAULT_MAX_RETRIES` (2), with a 400 ms then 800 ms backoff.
+`OkHttpTtsTransport` classifies a transport exception, a 5xx, a 429 and an empty
+`200` as transient, and OkHttp retries a broken connection itself. A dropped socket
+under emulator load therefore produces a second request for a piece that was already
+requested — the engine recovering, not the engine misbehaving.
+
+Three other explanations were ruled out against the source rather than assumed away:
+
+- **Not a concurrent double-fetch.** `fetchSegment` re-checks and registers the
+  in-flight index inside `synchronized(fetchLock)`, so two callers cannot both start
+  the same piece.
+- **Not a re-fetch of a played piece.** `schedulePrefetch` walks only forward from
+  `playIndex + 1`, and `playIndex` advances monotonically.
+- **Not a disagreement about the pieces.** The engine plans its segments with the
+  same `SpeechChunker.splitForStreaming` the test calls, on the same text (the
+  fixture has no leading or trailing whitespace for `TextLimits` to trim), so both
+  sides see 13 pieces — which is the number the failure message reported.
+
+That leaves the retry loop as the only source of a 14th request.
+
+#### The repair
+
+The assertion now states what the read must guarantee, and it counts pieces:
+
+| Assertion | Catches |
+|---|---|
+| every piece requested at least once | stopping early, which drops the rest of the passage |
+| no request body carries text outside the passage's pieces | a request the plan never contained |
+| no piece requested more than `1 + TtsEngine.DEFAULT_MAX_RETRIES` times | a request loop, as opposed to a recovery |
+
+A request is matched to a piece by the **longest** piece its body contains, because
+a body carries exactly one piece and the pieces are contiguous slices of the passage.
+Longest-match rather than first-match is what stops a short piece whose text happens
+to recur elsewhere from claiming another piece's request.
+
+#### Evidence
+
+| Check | Where | Result |
+|---|---|---|
+| Assertion logic, positive: each piece once | Python replica of the fixture | pass |
+| Assertion logic, positive: one piece retried (14 requests for 13 pieces) | Python replica | pass |
+| Negative control: last three pieces dropped | Python replica | fails on *missing* |
+| Negative control: one out-of-plan request | Python replica | fails on *unknown* |
+| Negative control: one piece requested 4× | Python replica | fails on *over budget* |
+| Compile of the instrumented sources | CI `compileDebugAndroidTestKotlin` | pass |
+| Instrumented suite | CI run `45938561004` (push) | 25 tests, `BUILD SUCCESSFUL` |
+| Instrumented suite | CI run `45938565202` (`pull_request`) | 25 tests, `BUILD SUCCESSFUL` |
+
+#### Not claimed
+
+- **The Kotlin was not compiled in the sandbox that wrote it.** There is no JDK and
+  no Android SDK there, so `compileDebugAndroidTestKotlin` and the emulator run are
+  the compile and the execution evidence — not this entry.
+- **Two consecutive passes do not prove the flake is gone.** The original defect
+  appeared on one of two runs at `b66932fd`; the candidate has now passed twice. What
+  the change does establish is that the assertion no longer depends on a property the
+  engine does not guarantee, which is the reason the flake existed.
+- **This test can no longer detect an audible double-play.** It never measured that:
+  a repeat *request* is not a repeat *playback*, and the engine plays staged files by
+  index. Nothing is lost — the property it claimed was not the property it measured —
+  but the claim is now stated correctly instead of being carried by a proxy.
+- **No device validation, no neural voice, no product behaviour change.** One test
+  assertion changed; `app/src/main` is untouched.
