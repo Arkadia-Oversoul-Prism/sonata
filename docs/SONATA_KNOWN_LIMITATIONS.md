@@ -31,18 +31,23 @@ can now produce a saved narration.
    quality tier is still missing.
 2. **No cloned voice.** The platform engine has no adapter stage, so a
    cloned-voice request is refused rather than silently downgraded.
-3. **`EngineFactory` is not called from the UI.** The engine is constructible in
-   production, but no screen invokes `narrate()` yet. The library path exists and
-   is tested; it is not yet reachable by a user tapping a button.
+3. **A saved narration has no catalogue yet.** Corrected 2026-11-27: the engine
+   *is* now reached from the UI — the main screen's **Save narration** action calls
+   `EngineFactory.create()` and `OfflineEngine.narrate()`, writes the WAV to
+   `filesDir/narrations/`, and records the narration (guarded by regression `R14`).
+   What is still missing is the other half: no screen lists the saved narrations,
+   so the user cannot browse or replay them from inside the app. "Generate → Save"
+   is reachable; "Catalogue → Replay" is not.
 4. **No device validation.** That a real device's engine produces audio is
    **UNVERIFIED**. The adapter is tested on the JVM against a double, which proves
    the wiring and the WAV handling, not the platform call.
 
-**Consequence.** The core function is no longer absent, but it is not yet the
-product: the voice is the device's, not Sonata's, and no UI reaches it.
+**Consequence.** The core function is no longer absent, and the screen now reaches
+it, but it is not yet the product: the voice is the device's, not Sonata's, and a
+saved narration cannot yet be browsed or replayed from a library screen.
 
-**What it would take.** Bundle a licensed neural model; call `EngineFactory` from
-the library screen; validate on a device.
+**What it would take.** Bundle a licensed neural model; add a library screen that
+lists the saved narrations and replays them; validate on a device.
 
 ### L2 — No **signed** APK or AAB **BLOCKER for release**
 

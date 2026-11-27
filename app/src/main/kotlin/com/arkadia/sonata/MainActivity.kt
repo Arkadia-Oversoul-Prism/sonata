@@ -26,6 +26,14 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import com.arkadia.sonata.databinding.ActivityMainBinding
+import com.arkadia.sonata.data.DocumentTitle
+import com.arkadia.sonata.engine.NarrationOutcome
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
  * The whole application, on one screen.
@@ -57,6 +65,19 @@ class MainActivity : AppCompatActivity() {
     private var readingPassage = ""
 
     private var lastCheckpointAt = 0L
+
+    /**
+     * The offline engine, built on the first save and released with the screen.
+     *
+     * Before this field, [EngineFactory] was constructible but nothing in the app
+     * called it, so no user action could produce a stored narration. It is built
+     * lazily so that opening the app costs nothing until the user asks for a file.
+     */
+    private var narrationEngine: EngineFactory.Wired? = null
+
+    /** Runs the save off the main thread; cancelled when the screen goes away. */
+    private val saveScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+    private var savingNarration = false
 
     private val conn = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName, binder: IBinder) {
@@ -349,6 +370,7 @@ class MainActivity : AppCompatActivity() {
 
         binding.btnResume.setOnClickListener { resumeRead() }
         binding.btnPaste.setOnClickListener { pasteFromClipboard() }
+        binding.btnSaveNarration.setOnClickListener { saveNarration() }
         binding.btnClear.setOnClickListener {
             binding.etText.setText("")
             rememberPassage()
@@ -766,6 +788,58 @@ class MainActivity : AppCompatActivity() {
                 .forEach { it.delete() }
             refreshStorageLabel()
         }
+    }
+
+    /**
+     * Save the current passage as a narration.
+     *
+     * This is the one place the screen reaches the offline engine. The work runs
+     * off the main thread, and the line the user reads comes from
+     * [NarrationPresenter] rather than being assembled here, so the "saved" claim
+     * is the same predicate the library uses before it offers audio for playback.
+     */
+    private fun saveNarration() {
+        if (savingNarration) return
+        val text = when (val validated = TextLimits.validate(binding.etText.text)) {
+            TextValidation.Empty -> {
+                showNotice(getString(R.string.empty_passage))
+                return
+            }
+
+            is TextValidation.Ready -> validated.text
+            is TextValidation.Truncated -> validated.text
+        }
+
+        val title = DocumentTitle.fromText(text)
+        savingNarration = true
+        binding.btnSaveNarration.isEnabled = false
+        binding.tvSaveNarrationState.text = getString(R.string.save_narration_working)
+
+        saveScope.launch {
+            val outcome = try {
+                val wired = narrationEngine ?: withContext(Dispatchers.IO) {
+                    EngineFactory.create(applicationContext)
+                }.also { narrationEngine = it }
+                withContext(Dispatchers.IO) {
+                    wired.engine.narrate(text = text, title = title)
+                }
+            } catch (e: Exception) {
+                NarrationOutcome.Failure("Saving failed: ${e.javaClass.simpleName}")
+            }
+
+            val report = NarrationPresenter.report(outcome, title)
+            binding.tvSaveNarrationState.text = report.message
+            binding.btnSaveNarration.isEnabled = true
+            savingNarration = false
+            showNotice(report.message)
+        }
+    }
+
+    override fun onDestroy() {
+        saveScope.cancel()
+        narrationEngine?.shutdown()
+        narrationEngine = null
+        super.onDestroy()
     }
 
     private companion object {

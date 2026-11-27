@@ -484,3 +484,81 @@ The 418 - 405 = 13 delta is exactly the new `TextNormalizerCaseTest` nodes
   without addressing the heading defect.
 - No engine, model, playback, or UI change. `EngineFactory` is still not called
   from the UI, which remains the next slice.
+
+---
+
+## 9. S4a — the screen reaches the offline engine (append-only)
+
+**Date:** 2026-11-27
+**Base:** `7c4e6a64e39e34685b06e2e1698cf9eb896b9720` (default branch `feature/sonata-tts-app`)
+**Branch:** `feat/save-narration-reachable-01`
+
+### 9.1 The defect
+
+§8.4 ended with the next slice named: *"`EngineFactory` is still not called from
+the UI."* It was not a note about polish. `grep -rn EngineFactory app/src`
+returned exactly one hit — the definition — so the production engine that saves
+a narration was constructible and tested but **unreachable**. No user action
+could produce a stored file. `SONATA_KNOWN_LIMITATIONS.md` L1 item 3 said the
+same thing, and §7.3 had already named the class: *"A correct component that
+nothing constructs is not a feature."*
+
+### 9.2 The change
+
+| File | Role |
+|---|---|
+| `NarrationPresenter.kt` (new, JVM) | Turns a `NarrationOutcome` into the one line the user reads, and the `saved` flag the library may build on |
+| `NarrationPresenterTest.kt` (new, JVM) | 4 tests, including a negative control for a Success that names no file |
+| `MainActivity.kt` | `saveNarration()`: builds the engine lazily, narrates off the main thread, reports through the presenter; `onDestroy` cancels the scope and shuts the engine down |
+| `activity_main.xml` | One `Save narration` control and its state line, in the existing Storage section |
+| `strings.xml` | Two strings |
+| `RegressionTest.kt` | **R14** — a source guard that fails if the wiring is removed |
+
+The save action reuses `TextLimits.validate` for the blank/oversized contract and
+`DocumentTitle.fromText` for the title, so the screen adds no new text rules. The
+engine is built on first use, not at startup, and released in `onDestroy`.
+
+**Why the `saved` claim lives in the presenter, not the screen.** The engine only
+returns `Success` after the WAV is written, but the report does not take that on
+trust: a `Success` whose `audioPath` is blank is reported as a failure. "Saved" is
+the claim that a file exists — the same predicate `LibraryRules.isPlayable`
+applies to a row before it is offered for playback. Putting it in a pure function
+is what makes it testable without a device.
+
+### 9.3 Evidence (this sandbox: JDK 21 + kotlinc 1.9.24 provisioned here)
+
+The tracked harness ran locally, not only in GitHub Actions.
+
+| Check | Command | Result |
+|---|---|---|
+| Base, before any change | `bash ci/run-ci.sh --check` | `total_tests=441`, job1/job2 exit 0 |
+| With the presenter + tests | `bash ci/run-ci.sh --check` | `total_tests=445`, job1/job2 exit 0 |
+| With the R14 guard | `bash ci/run-ci.sh --check` | **`total_tests=446`**, job1/job2 exit 0 |
+
+`445 - 441 = 4` is exactly the new `NarrationPresenterTest` nodes; `446 - 445 = 1`
+is exactly `R14`. Neither is inferred from the delta — `ci/scope.py` classifies
+both new files (`MAIN` / `TEST`).
+
+**Negative controls, both live on the real files and both restored byte-identically.**
+
+| Control | Edit | Result |
+|---|---|---|
+| The saved-claim guard is load-bearing | `if (outcome.audioPath.isBlank())` → `if (false)` | job 1 **exit 1**, and `JUnitCore` on the class names `1) a_success_with_no_path_is_not_reported_as_saved` |
+| The wiring guard is load-bearing | `wired.engine.narrate(` → `wired.engine.speak(` | job 2 **exit 1**, `1) R14 the screen reaches the offline engine` at `RegressionTest.kt:300` |
+
+Restored: `diff` against the backup was empty, `grep -c "wired.engine.narrate("`
+returned 1, and the harness returned to `total_tests=446`.
+
+### 9.4 Not claimed
+
+- **The Android sources were not compiled here.** There is no Android SDK in this
+  sandbox, so `MainActivity.kt`, `EngineFactory.kt` and the layout are `OUT` of the
+  JVM scope. The compile and APK evidence is GitHub Actions
+  (`ci.yml`, `build-apk.yml`), not this entry.
+- **No device validation.** That a real device's `TextToSpeech` engine writes the
+  file is **UNVERIFIED** here; the adapter is tested on the JVM against a double.
+- **No catalogue UI.** A saved narration is written and recorded, but no screen
+  lists the library yet, so "Save → Catalogue → Replay" is only half reached. This
+  entry does not claim the library is browsable.
+- **No neural voice.** The registry is still empty; this speaks in the platform
+  voice, which is the honest current tier.

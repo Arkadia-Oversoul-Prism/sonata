@@ -28,6 +28,8 @@
 
     <string name="action_read">Read aloud</string>
     <string name="action_read_again">Read again</string>
+    <string name="action_save_narration">Save narration</string>
+    <string name="save_narration_working">Saving narration…</string>
     <string name="action_more">More options</string>
     <string name="action_float">Float over other apps</string>
     <string name="action_paste">Paste</string>
