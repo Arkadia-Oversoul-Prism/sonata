@@ -562,3 +562,44 @@ returned 1, and the harness returned to `total_tests=446`.
   entry does not claim the library is browsable.
 - **No neural voice.** The registry is still empty; this speaks in the platform
   voice, which is the honest current tier.
+
+### 9.5 CI, observed on `29cb245a` (PR #10)
+
+| Check | Run | Result |
+|---|---|---|
+| JVM verification (app core + narration core) | `45965117961` | **success** |
+| Build Release APK + instrumented tests | `45965306042` (`pull_request`) | **success** |
+| Build Release APK (first, `push`) | `45965117945` | failure — not attributable |
+
+The first APK run failed in `Run unit tests` with `397 tests completed, 29 failed`,
+and **all 29** carry `java.lang.AssertionError at MavenArtifactFetcher.java:129` →
+`IOException at HttpURLConnection.java:2059`: Robolectric could not download its
+`android-all` jar. The 29 are 23 `SonataRepositoryTest` + 6
+`FloatingOverlayServiceTest`; `NarrationPresenterTest` is not among them, and the
+base branch passed the same workflow twice earlier the same day. It is runner
+infrastructure, not this branch.
+
+**That red still settled the compile question.** In the same run
+`> Task :app:compileDebugKotlin` and `> Task :app:compileDebugUnitTestKotlin`
+both succeeded, and the retry passed the whole job including instrumented tests.
+So `MainActivity.kt`, the layout and the new test compile — which the local JVM
+harness cannot show, because the Android sources are `OUT` of its scope.
+
+Recorded as **both a red and a green at one SHA**: `gh pr checks` reports only
+the latest run, so reading it alone would have hidden the transient failure (and
+reading only the red would have wrongly blamed the branch).
+
+### 9.6 Composition with the open PR #9
+
+Measured in a detached worktree by `git merge --no-edit origin/fix/s1-tier-truth-001`:
+
+- `MainActivity.kt`, `activity_main.xml`, `strings.xml`, `RegressionTest.kt`
+  **auto-merged**; no conflicted source file.
+- Only the two append-only logs conflicted (`ci-evidence.log`,
+  `docs/SONATA_IMPLEMENTATION_LEDGER.md`). Resolved by keeping #9's
+  `### Stage S1a` under section 8, then this branch's `## 9.` after it.
+- Composed tree: **`total_tests=452`, job1/job2 exit 0** —
+  `441 + 6 (#9) + 5 (this branch) = 452`, zero failures.
+
+Merge order is the human's. Whichever lands second re-runs the harness and
+re-appends both logs; the source itself composes cleanly.
