@@ -1,10 +1,10 @@
 === CI EVIDENCE ===
-commit_sha=7c4e6a64e39e34685b06e2e1698cf9eb896b9720
-short_sha=7c4e6a6
-tree_sha=d16e7ead601732eacc1090d9df6d5a8071e59b11
-branch=feat/save-narration-reachable-01
-dirty_files=8
-date_utc=2026-11-27T08:21:03Z
+commit_sha=117813214c31adf84ad9b3cf466e42a45914579e
+short_sha=1178132
+tree_sha=0a96e808bec383bad450c79a263bbbc7f8f80294
+branch=HEAD
+dirty_files=0
+date_utc=2026-11-27T10:20:04Z
 harness=ci/run-ci.sh (tracked in this tree)
 android_sdk=ABSENT - Gradle build, lint and device tests NOT RUN
 
@@ -14,8 +14,8 @@ openjdk version "21.0.13" 2026-10-20
 
 === JOB 1: app core ===
 === SCOPE ===
-jvm_main_sources=50
-jvm_test_sources=21
+jvm_main_sources=51
+jvm_test_sources=22
 excluded_sources=26
   EXCLUDED app/src/main/kotlin/com/arkadia/sonata/AndroidAudioPlayer.kt
   EXCLUDED app/src/main/kotlin/com/arkadia/sonata/AndroidOfflineVoice.kt
@@ -48,8 +48,9 @@ excluded_sources=26
 COMPILE_EXIT=0
 
 === TEST ===
-test_classes=21
+test_classes=22
   CLASS com.arkadia.sonata.BackendConfigTest
+  CLASS com.arkadia.sonata.LibraryPresenterTest
   CLASS com.arkadia.sonata.NarrationPresenterTest
   CLASS com.arkadia.sonata.NotificationTextTest
   CLASS com.arkadia.sonata.PlaybackStateTest
@@ -71,8 +72,8 @@ test_classes=21
   CLASS com.arkadia.sonata.offline.VoiceStudioTest
   CLASS com.arkadia.sonata.offline.WavReaderTest
 JUnit version 4.13.2
-Time: 0.309
-OK (276 tests)
+Time: 0.325
+OK (286 tests)
 
 TEST_EXIT=0
 RESULT=PASS
@@ -84,14 +85,14 @@ narration_core_test_sources=6
 COMPILE_EXIT=0
 test_classes=6
 JUnit version 4.13.2
-................................................................connectivityProbe: live=true elapsedMs=19
-..........................................................................................................
-Time: 0.661
+................................................................connectivityProbe: live=true elapsedMs=20
+...........................................................................................................
+Time: 0.618
 
-OK (170 tests)
+OK (171 tests)
 
 
 NARRATION_EXIT=0
 
-SUMMARY total_tests=446 job1_exit=0 job2_exit=0
+SUMMARY total_tests=457 job1_exit=0 job2_exit=0
 VERDICT=PASS
