@@ -304,12 +304,56 @@ class DeviceProgressiveReadProtocolTest {
         engine.shutdown()
 
         assertTrue("the read never finished; it stopped after some piece", finished)
-        val requests = generateSequence { server.takeRequest(500, TimeUnit.MILLISECONDS) }.toList()
-        assertEquals(
-            "every piece must be requested exactly once: stopping early drops the rest " +
-                "of the passage, and a repeat would play it twice",
-            pieces.size,
-            requests.size,
+
+        // Counted by *piece*, not by request.
+        //
+        // A request is not one-to-one with a piece. [TtsEngine] retries a
+        // transiently-failed piece — a dropped socket, a 502, an empty 200 — and
+        // OkHttp retries a broken connection on its own, so a read of 13 pieces can
+        // legitimately put 14 requests on the wire. Measured at b66932fd: this
+        // assertion read "expected:<13> but was:<14>" on one of two runs of the
+        // same commit, while the read completed and every piece had been asked
+        // for. An exact request count measures the emulator's connection
+        // stability, not the engine's sequencing.
+        //
+        // What is asserted instead is what the read must guarantee: every piece is
+        // asked for, nothing outside the plan is asked for, and no piece is asked
+        // for beyond the engine's retry budget — a retry is a recovery, more than
+        // that is a request loop.
+        val bodies = generateSequence { server.takeRequest(500, TimeUnit.MILLISECONDS) }
+            .map { it.body.readUtf8() }
+            .toList()
+
+        // The longest piece a body carries is the piece that body asked for: a
+        // request carries exactly one piece, so the only way a second piece matches
+        // is for its whole text to appear inside the first one.
+        val requested = bodies.map { body ->
+            pieces.indices.filter { body.contains(pieces[it]) }
+                .maxByOrNull { pieces[it].length }
+                ?: -1
+        }
+
+        val unknown = bodies.filterIndexed { i, _ -> requested[i] < 0 }
+        assertTrue(
+            "a request carried text that is not one of the passage's pieces: " +
+                unknown.map { it.take(120) },
+            unknown.isEmpty(),
+        )
+
+        val missing = pieces.indices.filter { it !in requested }
+        assertTrue(
+            "every piece must be requested at least once; stopping early drops the rest " +
+                "of the passage. Missing $missing of ${pieces.size} pieces",
+            missing.isEmpty(),
+        )
+
+        val budget = 1 + TtsEngine.DEFAULT_MAX_RETRIES
+        val overBudget = requested.groupingBy { it }.eachCount().filterValues { it > budget }
+        assertTrue(
+            "a piece was requested more than $budget times ($overBudget). The engine " +
+                "retries a transient failure at most ${TtsEngine.DEFAULT_MAX_RETRIES} " +
+                "times, so more than that is a request loop, not a recovery",
+            overBudget.isEmpty(),
         )
     }
 
