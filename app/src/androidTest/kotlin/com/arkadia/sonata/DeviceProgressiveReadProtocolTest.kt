@@ -326,10 +326,15 @@ private class FakeSettingsForDevice(
     override var backendUrl: String = "",
     override var preferOnline: Boolean = true,
     /**
-     * Device tests run against a build whose manifest declares no `INTERNET`
-     * permission, so the default states the truth about the build under test.
+     * These tests drive a fake backend on `localhost` and assert the *online*
+     * segmentation protocol, so the fake models a build that can reach the
+     * network. That is deliberately not the shipping configuration (the shipped
+     * manifest declares no `INTERNET`): defaulting this to `false` makes the
+     * engine refuse the online tier and every request assertion here fails with
+     * "no request reached the server". A device test that means the shipped
+     * build must say so explicitly.
      */
-    override var networkReachable: Boolean = false,
+    override var networkReachable: Boolean = true,
 ) : TtsSettings
 
 /**
