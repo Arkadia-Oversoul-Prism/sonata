@@ -61,6 +61,16 @@ class SpeechService : Service() {
     /** The engine that produced the current utterance, for the notification. */
     private var currentEngine: TtsEngineKind? = null
 
+    /**
+     * True from the moment a read is dispatched until it ends.
+     *
+     * Distinguishes "this failure ended a read" from "this failure belongs to
+     * something else" — a voice preview reports errors through the same listener,
+     * and recording one of those as the passage's outcome would tell the user a
+     * read they never started had failed.
+     */
+    private var reading = false
+
     // ── Lifecycle callbacks exposed to bound clients ────────────────────────
     //
     // A list, not single slots. The main screen and the floating player are both
@@ -123,6 +133,7 @@ class SpeechService : Service() {
                 currentLabel  = command.label
                 lastError     = null
                 fellBackOffline = false
+                reading = true
                 promoteToForeground(playing = true)
                 tts.speakFrom(command.text, command.fromChar)
             }
@@ -141,7 +152,7 @@ class SpeechService : Service() {
 
             SpeechCommand.Pause  -> { tts.pause();  updateNotification(playing = false) }
             SpeechCommand.Resume -> { tts.resume(); updateNotification(playing = true)  }
-            SpeechCommand.Stop   -> stopSelf()
+            SpeechCommand.Stop   -> { reading = false; stopSelf() }
 
             // No action, or a SPEAK with no speakable text: do not claim
             // foreground for work that will not happen.
@@ -208,7 +219,7 @@ class SpeechService : Service() {
 
     fun pause()  { tts.pause();  updateNotification(playing = false) }
     fun resume() { tts.resume(); updateNotification(playing = true)  }
-    fun stop()   { tts.stop();   stopForeground(STOP_FOREGROUND_REMOVE); stopSelf() }
+    fun stop()   { reading = false; tts.stop(); stopForeground(STOP_FOREGROUND_REMOVE); stopSelf() }
 
     val isPlaying get() = tts.isPlaying
     val isPaused  get() = tts.isPaused
@@ -272,6 +283,18 @@ class SpeechService : Service() {
             }
 
             stopForeground(STOP_FOREGROUND_REMOVE)
+            // Recorded before stopSelf(): this instance is about to die, and a
+            // screen that was not bound at this moment would otherwise come back
+            // to "Ready" for a read that reached the end.
+            if (reading) {
+                prefs.rememberOutcome(currentText, ReadOutcome.Status.COMPLETED, null)
+                // The passage was read to the end, so there is nothing left to carry
+                // on to. Without this the last mid-read checkpoint — up to
+                // CHECKPOINT_MS stale — survives completion, and the screen offers to
+                // resume a passage that is already finished.
+                prefs.rememberProgress(currentText, 0)
+                reading = false
+            }
             // Notified before stopSelf(): the service is gone by the time the last
             // client runs, and a client that only learns of completion from a
             // destroyed service can never dismiss itself.
@@ -289,6 +312,13 @@ class SpeechService : Service() {
             }
             clients.forEach { it.onError(msg) }
             if (fellBackTo == null) {
+                // A terminal failure of a read. Recorded for the same reason as a
+                // completion: the screen may not be bound, and the service is about
+                // to stop. A preview's failure is not a read's, so it is not recorded.
+                if (reading) {
+                    prefs.rememberOutcome(currentText, ReadOutcome.Status.FAILED, msg)
+                    reading = false
+                }
                 currentEngine = null
                 stopForeground(STOP_FOREGROUND_REMOVE)
                 stopSelf()

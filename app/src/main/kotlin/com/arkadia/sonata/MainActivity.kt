@@ -74,6 +74,7 @@ class MainActivity : AppCompatActivity() {
             speechService = (binder as SpeechService.LocalBinder).getService()
             bound = true
             speechService?.addClient(uiClient)
+            adoptStoredOutcome()
             render()
         }
 
@@ -446,6 +447,35 @@ class MainActivity : AppCompatActivity() {
         readFrom(at)
     }
 
+    /**
+     * Present the outcome of a read that ended while this screen was not bound.
+     *
+     * The service records how a read ended before it stops itself, so a read that
+     * finished while the user was in another app comes back as Completed rather
+     * than Ready — the state the screen could previously only show while it was
+     * watching. [ReadOutcomePolicy] withholds the record when it describes
+     * different text or would paint over a read that is running now.
+     */
+    private fun adoptStoredOutcome() {
+        val stored = prefs.consumeOutcome() ?: return
+        val outcome = ReadOutcomePolicy.adopt(
+            stored = stored,
+            currentPassage = binding.etText.text?.toString().orEmpty(),
+            live = speechService?.isPlaying == true || speechService?.isPaused == true,
+        ) ?: return
+        readPreparing = false
+        when (outcome.status) {
+            ReadOutcome.Status.COMPLETED -> {
+                readCompleted = true
+                readFailure = null
+            }
+            ReadOutcome.Status.FAILED -> {
+                readCompleted = false
+                readFailure = outcome.message
+            }
+        }
+    }
+
     private fun stopRead() {
         rememberProgress()
         speechService?.stop()
@@ -489,6 +519,9 @@ class MainActivity : AppCompatActivity() {
         clearNotice()
         rememberPassage()
         readingPassage = text
+        // A new read supersedes any outcome still on record: presenting the previous
+        // read's "Completed" over one the user just started would be a false claim.
+        prefs.clearOutcome()
         // A fresh read of the same passage restarts from the top, so any stored
         // position is no longer where the user is.
         prefs.rememberProgress(text, fromChar)

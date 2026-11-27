@@ -227,3 +227,32 @@ That is the honest position, and it is the position the verdict in
 **Updated 2026-11-26 (PR #7).** The test count above was 281 when this section
 was written; it is now 405. The verdict is unchanged, because the count was never
 what the verdict rested on — L1 and L4 are.
+
+---
+
+## 2. Playback-state limitations
+
+### L7 — the terminal read state survives the screen going away, but only once
+
+**Added 2026-11-27 (PR #9, stage S1d).**
+
+Before this stage, a read that finished while the screen was not bound came back as
+`Ready` — the same screen as one that had never been used — because the outcome
+existed only in the memory of a bound client and the service stops itself when a read
+ends.
+
+The service now records how a read ended before it stops, and the screen adopts that
+record when it binds again. Two limits remain, and neither is hidden:
+
+1. **The record is presented once.** It is consumed when shown, so leaving and
+   returning a second time shows `Ready`. Keeping it longer would let the screen
+   claim "Completed" indefinitely, long after the user had started and stopped other
+   reads.
+2. **The service still stops itself on completion.** The outcome is carried around
+   that lifecycle, not through it: a finished read cannot be resumed in place from
+   the service, and no attempt is made to keep it alive.
+
+Not device-validated: that a real screen paints `Completed` after returning is a
+device observation. What is verified is the adoption rule (10 JVM tests), the record's
+round trip through `Prefs`, and the wiring (3 source guards with two negative
+controls). See `SONATA_IMPLEMENTATION_LEDGER.md` §10.

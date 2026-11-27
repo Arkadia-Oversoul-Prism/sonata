@@ -91,6 +91,47 @@ class Prefs(context: Context) : TtsSettings {
             .apply()
     }
 
+    /**
+     * Record how a read ended, so the outcome survives the screen going away.
+     *
+     * The service stops itself when a read finishes, taking its in-memory state
+     * with it. Without this the screen of a returning user cannot tell a finished
+     * read from an unused one. See [ReadOutcome].
+     */
+    fun rememberOutcome(passage: String, status: ReadOutcome.Status, message: String?) {
+        sp.edit()
+            .putString(KEY_OUTCOME_PASSAGE, passage)
+            .putString(KEY_OUTCOME_STATUS, status.name)
+            .putString(KEY_OUTCOME_MESSAGE, message)
+            .apply()
+    }
+
+    /**
+     * The stored outcome, then forget it: it is presented once.
+     *
+     * A record that were kept after being shown would let the screen claim
+     * "Completed" indefinitely, long after the user started and stopped other
+     * reads. Presenting it once is the honest bound.
+     */
+    fun consumeOutcome(): ReadOutcome? {
+        val passage = sp.getString(KEY_OUTCOME_PASSAGE, null) ?: return null
+        val status = sp.getString(KEY_OUTCOME_STATUS, null)
+            ?.let { runCatching { ReadOutcome.Status.valueOf(it) }.getOrNull() }
+            ?: return null
+        val message = sp.getString(KEY_OUTCOME_MESSAGE, null)
+        clearOutcome()
+        return ReadOutcome(passage = passage, status = status, message = message)
+    }
+
+    /** Forget a stored outcome without presenting it — a new read supersedes it. */
+    fun clearOutcome() {
+        sp.edit()
+            .remove(KEY_OUTCOME_PASSAGE)
+            .remove(KEY_OUTCOME_STATUS)
+            .remove(KEY_OUTCOME_MESSAGE)
+            .apply()
+    }
+
     // ── TtsSettings ────────────────────────────────────────────────────────
     // The engine reads through these narrow names; the stored keys above keep
     // their original names so existing installs keep their preferences.
@@ -123,5 +164,8 @@ class Prefs(context: Context) : TtsSettings {
         private const val KEY_EDGE_TTS_URL  = "edge_tts_url"
         private const val KEY_PREFER_EDGE   = "prefer_edge_tts"
         private const val KEY_LAST_PASSAGE  = "last_passage"
+        private const val KEY_OUTCOME_PASSAGE = "read_outcome_passage"
+        private const val KEY_OUTCOME_STATUS  = "read_outcome_status"
+        private const val KEY_OUTCOME_MESSAGE = "read_outcome_message"
     }
 }
