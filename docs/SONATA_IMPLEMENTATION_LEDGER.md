@@ -603,3 +603,24 @@ Measured in a detached worktree by `git merge --no-edit origin/fix/s1-tier-truth
 
 Merge order is the human's. Whichever lands second re-runs the harness and
 re-appends both logs; the source itself composes cleanly.
+
+### 9.7 The push-run/PR-run split reproduced (head `921cf8e`)
+
+The pattern in §9.5 is not a one-off. At the docs-only head `921cf8e`:
+
+| Run | Event | Build Release APK | Instrumented tests |
+|---|---|---|---|
+| `45965932325` | `pull_request` | **success** | **success** |
+| `45965940901` | `push` | **failure** | success |
+
+The failing job carries **29** `MavenArtifactFetcher` occurrences again — the same
+count, the same `SonataRepositoryTest` / `FloatingOverlayServiceTest` failures,
+the same `compileDebugKotlin` success. So on this repository the `push`-event
+build is red on a Robolectric artifact download while the `pull_request`-event
+build of the identical tree is green, twice over.
+
+**Consequence for reading CI here:** the `pull_request` run is the one that gates
+the PR, and it is green. A red `push` run at the same SHA is not evidence about
+the tree. Do not "fix" it in a feature branch — it is runner infrastructure, and
+the fix (a pre-warmed Robolectric cache or a pinned `android-all` jar) is a
+separate bounded change.
