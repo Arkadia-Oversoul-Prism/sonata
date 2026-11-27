@@ -683,10 +683,18 @@ class MainActivity : AppCompatActivity() {
         }
 
         // ── Backend label, when More is open ──────────────────────────────────
-        binding.tvBackend.text = if (prefs.preferEdgeTts) {
-            "Voice: Arkadia neural (${prefs.backendUrl})"
-        } else {
-            "Voice: this device's speech engine"
+        // The tier the engine will actually use, not the stored preference. A label
+        // that names the neural voice while the app can only reach the device's own
+        // engine is the same untruth as the failed request behind it.
+        binding.tvBackend.text = when (
+            SynthesisTierPolicy.choose(
+                preferOnline = prefs.preferEdgeTts,
+                backendUrl = prefs.backendUrl,
+                networkReachable = prefs.networkReachable,
+            )
+        ) {
+            TtsEngineKind.ONLINE -> "Voice: Arkadia neural (${prefs.backendUrl})"
+            TtsEngineKind.OFFLINE -> "Voice: this device's speech engine"
         }
     }
 

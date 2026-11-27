@@ -402,8 +402,16 @@ class TtsEngine(
             return
         }
         val url = settings.backendUrl.trim()
-        if (!settings.preferOnline || url.isEmpty()) {
-            listener?.onError("Voice preview needs the online voice", null)
+        // Same decision as a read: a preview that cannot reach the network must say
+        // so, not attempt the socket and report the transport's exception as though
+        // the network had failed. See [SynthesisTierPolicy].
+        if (SynthesisTierPolicy.choose(
+                preferOnline = settings.preferOnline,
+                backendUrl = url,
+                networkReachable = settings.networkReachable,
+            ) != TtsEngineKind.ONLINE
+        ) {
+            listener?.onError("Voice preview needs the online voice, and this build cannot reach the network", null)
             return
         }
 
@@ -528,7 +536,12 @@ class TtsEngine(
         // invariant local: nothing below has to defend against a bad offset.
         val from = fromChar.coerceIn(0, text.length)
 
-        if (settings.preferOnline && url.isNotEmpty()) {
+        if (SynthesisTierPolicy.choose(
+                preferOnline = settings.preferOnline,
+                backendUrl = url,
+                networkReachable = settings.networkReachable,
+            ) == TtsEngineKind.ONLINE
+        ) {
             speakOnline(text, url, from)
         } else {
             speakOffline(text, fromChar = from, reportedFallback = null)

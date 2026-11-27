@@ -484,3 +484,74 @@ The 418 - 405 = 13 delta is exactly the new `TextNormalizerCaseTest` nodes
   without addressing the heading defect.
 - No engine, model, playback, or UI change. `EngineFactory` is still not called
   from the UI, which remains the next slice.
+
+---
+
+### Stage S1a — Which tier actually runs (2026-11-27)
+
+| Field | Value |
+|---|---|
+| Branch | `fix/s1-tier-truth-001` |
+| PR | #9 (draft) |
+| Base | `feature/sonata-tts-app` @ `7c4e6a64e39e34685b06e2e1698cf9eb896b9720` |
+| Tests executed — tracked harness (`ci/run-ci.sh`) | 447 (was 441; **6 new**) |
+| Tests executed — engine suite (`TtsEngine*Test`) | 70 (was 65; **5 new**) |
+| Tests failing | 0 in both |
+| Negative control — policy gate removed | `SynthesisTierPolicyTest` **2 failed / 6** |
+| Negative control — both call sites reverted | `TtsEngineOnlineTest` **4 failed / 46** |
+| CI | not run at the time of writing; this entry is updated only from a real run |
+
+**What was broken.** The engine chose its tier with `preferOnline && url.isNotEmpty()`.
+Both inputs were true in the shipped configuration — `Prefs.preferEdgeTts` defaults
+to `true` and `BackendConfig.DEFAULT_URL` is a live address — so **every read took
+the online tier first**, in a build whose manifest deliberately declares no
+`INTERNET` permission. The consequence was not a theory:
+
+- the first audio of every read waited for three failed attempts and 1.2 s of
+  exponential backoff (`DEFAULT_MAX_RETRIES = 2`, `DEFAULT_RETRY_BASE_DELAY_MS = 400`,
+  both added in PR #7, which made this worse rather than better);
+- the user saw an `UnknownHostException`, which reads as a network fault and is not;
+- the screen reported "Fetching the next part of the passage…" for a fetch that
+  could never succeed;
+- the More row said "Voice: Arkadia neural (…)" while the user was hearing the
+  device's engine.
+
+The three facts — what the user asked for, what address is configured, and whether
+the build can open a socket — were collapsed into two, and the missing one was the
+only one that was not a request.
+
+**What was built.**
+
+| File | Role |
+|---|---|
+| `SynthesisTierPolicy.kt` | The decision, pure JVM: preference + gateway + capability → tier |
+| `TtsSettings.kt` | New `networkReachable`, documented as a capability rather than a preference |
+| `Prefs.kt` | Derives it from the manifest (`checkSelfPermission(INTERNET)`), never hardcoded |
+| `TtsEngine.kt` | `start` and `preview` both route through the policy |
+| `MainActivity.kt` | The More-row label reports the effective tier, not the stored preference |
+| `SynthesisTierPolicyTest.kt` | 6 tests, in the tracked JVM scope |
+
+**Why the capability is read from the manifest and not written as `false`.** A
+hardcoded `false` would be correct today and silently wrong the day the permission
+returns. Asking the manifest means the gate flips by itself, and regression R11 —
+which already fails the build if `INTERNET` comes back — keeps the two from
+disagreeing.
+
+**Why the offline tier reports no error.** A build that cannot reach the network is
+not degrading from a tier it could have used; the device voice *is* its tier.
+Reporting a failure there would be the same untruth in a different place.
+
+**Verification, and its boundary.** The decision is executed by the tracked harness
+(job 1). Its two call sites are not: `TtsEngine.kt` is `FORCED_OUT` in `ci/scope.py`,
+and the Activity needs the Android runtime. The engine's behaviour was therefore
+measured against a scratch harness that stubs `android.util.Log` and
+`AndroidOfflineVoice` — **70 tests, 0 failures**, with the base tree at 65 and the
+same 0 failures, and reverting both call sites reddening exactly the four tests that
+assert the gate. That harness is not tracked, so it is a measurement and not CI
+evidence; `TtsEngineOnlineTest` runs for real under `./gradlew testDebugUnitTest` in
+`build-apk.yml`. Recorded in `SONATA_KNOWN_LIMITATIONS.md` §2 L5a rather than implied
+to be stronger than it is.
+
+**Not claimed.** No device validation. No neural voice. No UI change beyond the label.
+`EngineFactory` is still not called from the UI, so a *saved* narration is still
+unreachable by a user tapping a button — §8.4's next slice is unchanged by this one.

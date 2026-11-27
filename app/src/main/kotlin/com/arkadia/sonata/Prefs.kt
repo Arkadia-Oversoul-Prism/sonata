@@ -1,7 +1,9 @@
 package com.arkadia.sonata
 
+import android.Manifest
 import android.content.Context
 import android.content.SharedPreferences
+import android.content.pm.PackageManager
 
 /**
  * Thin SharedPreferences wrapper.
@@ -12,8 +14,10 @@ import android.content.SharedPreferences
  */
 class Prefs(context: Context) : TtsSettings {
 
+    private val appContext: Context = context.applicationContext
+
     private val sp: SharedPreferences =
-        context.applicationContext.getSharedPreferences("sonata_prefs", Context.MODE_PRIVATE)
+        appContext.getSharedPreferences("sonata_prefs", Context.MODE_PRIVATE)
 
     override var voice: String
         get() = sp.getString(KEY_VOICE, "aria") ?: "aria"
@@ -94,6 +98,20 @@ class Prefs(context: Context) : TtsSettings {
     override val backendUrl: String get() = edgeTtsUrl
 
     override val preferOnline: Boolean get() = preferEdgeTts
+
+    /**
+     * Whether this build can reach the network at all.
+     *
+     * Asked of the manifest rather than hardcoded, because the manifest is the
+     * thing that decides it. The app declares no `INTERNET` permission, so this
+     * answers false and the online tier is correctly unreachable. If the
+     * permission ever returns, this flips to true by itself and regression R11
+     * fails the build — the two cannot silently disagree about the offline
+     * guarantee, which is the property that matters.
+     */
+    override val networkReachable: Boolean
+        get() = appContext.checkSelfPermission(Manifest.permission.INTERNET) ==
+            PackageManager.PERMISSION_GRANTED
 
     companion object {
         private const val KEY_LAST_SPOKEN = "last_spoken_chars"

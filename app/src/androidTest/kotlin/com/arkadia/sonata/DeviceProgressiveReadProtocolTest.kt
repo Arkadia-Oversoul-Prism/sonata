@@ -325,6 +325,11 @@ private class FakeSettingsForDevice(
     override var pitch: Float = 1.0f,
     override var backendUrl: String = "",
     override var preferOnline: Boolean = true,
+    /**
+     * Device tests run against a build whose manifest declares no `INTERNET`
+     * permission, so the default states the truth about the build under test.
+     */
+    override var networkReachable: Boolean = false,
 ) : TtsSettings
 
 /**

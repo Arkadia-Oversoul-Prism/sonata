@@ -94,6 +94,38 @@ might accidentally re-enable.
 exists would leave no synthesis path at all. The removal should happen with the
 replacement.
 
+**Corrected 2026-11-27 (PR #9).** The paragraph above said the transport "cannot
+work" and stopped there, which hid a live defect: the *engine* still chose the
+online tier on every read, so the dead transport was attempted, retried twice and
+backed off before the offline voice took over. The user-visible result was an
+`UnknownHostException` on every read and a "Fetching the next part of the passage…"
+state for a fetch that was never possible. The tier decision is now
+`SynthesisTierPolicy`, and it consults the build's own capability — the manifest
+permission — rather than only the stored preference. See §2 L5a.
+
+### L5a — The tier decision is verified in JVM; its two call sites are not
+
+The decision itself — preference, gateway, capability in, tier out — is pure JVM and
+is executed by the tracked harness (`SynthesisTierPolicyTest`, 6 tests, job 1).
+
+The two places that *call* it are not executed there:
+
+| Call site | Why it is out of the JVM harness |
+|---|---|
+| `TtsEngine.start` / `TtsEngine.preview` | `TtsEngine.kt` is `FORCED_OUT` in `ci/scope.py` |
+| `MainActivity.render` (the More-row label) | The Activity needs the Android runtime |
+
+`TtsEngine`'s behaviour is covered by five tests in `TtsEngineOnlineTest`, which run
+under `./gradlew testDebugUnitTest` in `.github/workflows/build-apk.yml`. They were
+executed locally for this change against a scratch harness that stubs
+`android.util.Log` and `AndroidOfflineVoice`: **70 tests, 0 failures**, and removing
+the gate reddens exactly the four that assert it. That scratch harness is not
+tracked, so this is a measurement, not reproducible CI evidence. The Activity label
+is verified by inspection only.
+
+**Consequence.** Do not read "the gate is tested" as "the gate is wired". The wiring
+is reviewed, and only the Android job can prove it.
+
 ### L6 — The offline sentinel is partly self-referential
 
 `NetworkSentinel.attempt` is called only from tests. "Zero attempts" is therefore
