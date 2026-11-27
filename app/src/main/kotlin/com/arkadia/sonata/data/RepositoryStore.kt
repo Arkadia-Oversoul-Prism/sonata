@@ -56,6 +56,8 @@ class RepositoryStore(private val repository: SonataRepository) : SonataStore {
 
     override suspend fun narration(id: Long): Narration? = repository.narration(id)
 
+    override suspend fun allNarrations(): List<Narration> = repository.allNarrations()
+
     override suspend fun savePosition(narrationId: Long, positionMs: Long) =
         repository.savePosition(narrationId, positionMs)
 

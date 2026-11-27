@@ -393,6 +393,49 @@ class RegressionTest {
         }
     }
 
+    // ---- R15: the library could not be read, so a saved narration could not be replayed ----
+    //
+    // R14 made the engine reachable, which meant a user could save a narration. But
+    // nothing listed what had been saved, so "Save -> Catalogue -> Replay" stopped at
+    // the first step and the file was write-only. The screen now reads the library and
+    // offers each row through the tested presenter — the presenter is what decides a
+    // row is playable, because the database saying COMPLETE is not proof the file is
+    // there. This guard notices if either half is removed.
+
+    @Test
+    fun `R15 the screen lists saved narrations and replays them`() {
+        val activity = locateSource(MAIN_ACTIVITY_CANDIDATES)
+        assertNotNull(
+            "MainActivity.kt must be readable from the test working directory; " +
+                "searched: ${MAIN_ACTIVITY_CANDIDATES.joinToString()}",
+            activity
+        )
+        val source = activity!!.readText()
+        assertTrue(
+            "the screen must read the library it writes to",
+            source.contains("allNarrations(")
+        )
+        assertTrue(
+            "the offer must come from the tested presenter, not from the view",
+            source.contains("LibraryPresenter.rows(")
+        )
+        assertTrue(
+            "a saved narration must actually be played from its file",
+            source.contains("libraryPlayer.play(")
+        )
+
+        val layout = locateSource(LAYOUT_CANDIDATES)
+        assertNotNull(
+            "activity_main.xml must be readable from the test working directory; " +
+                "searched: ${LAYOUT_CANDIDATES.joinToString()}",
+            layout
+        )
+        assertTrue(
+            "the list must have a place on the screen",
+            layout!!.readText().contains("libraryList")
+        )
+    }
+
     // ---- R14: thermal governor oscillated ----
     //
     // Without hysteresis and dwell, a borderline temperature caused pause/resume

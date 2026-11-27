@@ -4,6 +4,7 @@ import android.content.Context
 import com.arkadia.sonata.data.RepositoryStore
 import com.arkadia.sonata.data.SonataDatabase
 import com.arkadia.sonata.data.SonataRepository
+import com.arkadia.sonata.data.SonataStore
 import com.arkadia.sonata.engine.DeviceProfile
 import com.arkadia.sonata.engine.InMemoryModelRegistry
 import com.arkadia.sonata.engine.OfflineEngine
@@ -47,20 +48,33 @@ object EngineFactory {
      */
     fun create(context: Context): Wired {
         val synthesis = AndroidPlatformSynthesis(context)
+        val store = store(context)
         val engine = OfflineEngine(
-            repository = RepositoryStore(SonataRepository(SonataDatabase.get(context))),
+            repository = store,
             fileStore = AppPrivateFileStore(context),
             // No neural model ships yet. The fallback is the active tier.
             registry = InMemoryModelRegistry(emptyList()),
             device = DeviceProfile.UNMEASURED,
             fallback = PlatformSpeechModel(PlatformModel.DESCRIPTOR, synthesis),
         )
-        return Wired(engine, synthesis)
+        return Wired(engine, store, synthesis)
     }
 
-    /** The engine and the platform engine it owns. */
+    /**
+     * The persistence seam on its own.
+     *
+     * The library screen lists what the engine wrote, and it needs that read path
+     * without constructing a synthesiser. Building it from the same expression as
+     * [create] keeps one definition of where the library lives: the Room database
+     * behind [SonataDatabase.get], not a second copy of the wiring.
+     */
+    fun store(context: Context): SonataStore =
+        RepositoryStore(SonataRepository(SonataDatabase.get(context)))
+
+    /** The engine, the store it writes to, and the platform engine it owns. */
     class Wired(
         val engine: OfflineEngine,
+        val store: SonataStore,
         private val synthesis: AndroidPlatformSynthesis,
     ) {
         /** Release the platform engine. */

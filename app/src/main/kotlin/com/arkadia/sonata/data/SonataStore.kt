@@ -54,6 +54,15 @@ interface SonataStore {
 
     suspend fun narration(id: Long): Narration?
 
+    /**
+     * Every narration, newest first.
+     *
+     * The library asks "what do I have?", which is a question about the whole set
+     * rather than one row. The order is fixed here so the screen does not have to
+     * choose it and a test can pin it.
+     */
+    suspend fun allNarrations(): List<Narration>
+
     suspend fun savePosition(narrationId: Long, positionMs: Long)
 
     suspend fun renameNarration(narrationId: Long, title: String)

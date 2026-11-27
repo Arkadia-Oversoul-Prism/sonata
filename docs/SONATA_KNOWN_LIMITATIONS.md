@@ -31,23 +31,31 @@ can now produce a saved narration.
    quality tier is still missing.
 2. **No cloned voice.** The platform engine has no adapter stage, so a
    cloned-voice request is refused rather than silently downgraded.
-3. **A saved narration has no catalogue yet.** Corrected 2026-11-27: the engine
-   *is* now reached from the UI — the main screen's **Save narration** action calls
-   `EngineFactory.create()` and `OfflineEngine.narrate()`, writes the WAV to
-   `filesDir/narrations/`, and records the narration (guarded by regression `R14`).
-   What is still missing is the other half: no screen lists the saved narrations,
-   so the user cannot browse or replay them from inside the app. "Generate → Save"
-   is reachable; "Catalogue → Replay" is not.
+3. **A saved narration can now be browsed and replayed, but not managed.**
+   Corrected 2026-11-27 in two steps. The engine *is* reached from the UI — the
+   main screen's **Save narration** action calls `EngineFactory.create()` and
+   `OfflineEngine.narrate()`, writes the WAV to `filesDir/narrations/`, and records
+   the narration (guarded by regression `R14`). The screen also *lists* what was
+   saved and replays it from disk (S4b, guarded by regression `R15`): each row is
+   offered for replay only when `LibraryRules.isPlayable` holds **and** the file is
+   actually on disk, so a row whose audio was deleted reads as
+   "Audio file missing" rather than offering a tap that fails.
+
+   What is still missing: **rename, delete, favourites, collections and export**
+   have no UI (the rules and the persistence operations exist and are tested; the
+   screen exposes none of them), and a narration cannot be re-read from a saved
+   reading position.
 4. **No device validation.** That a real device's engine produces audio is
    **UNVERIFIED**. The adapter is tested on the JVM against a double, which proves
    the wiring and the WAV handling, not the platform call.
 
-**Consequence.** The core function is no longer absent, and the screen now reaches
-it, but it is not yet the product: the voice is the device's, not Sonata's, and a
-saved narration cannot yet be browsed or replayed from a library screen.
+**Consequence.** The core function is no longer absent: the screen reaches the
+engine, lists what it saved, and replays it offline. It is still not the product —
+the voice is the device's, not Sonata's, and the library cannot yet rename, delete
+or export what it lists.
 
-**What it would take.** Bundle a licensed neural model; add a library screen that
-lists the saved narrations and replays them; validate on a device.
+**What it would take.** Bundle a licensed neural model; add the library's management
+actions (rename, delete, favourite, export); validate on a device.
 
 ### L2 — No **signed** APK or AAB **BLOCKER for release**
 

@@ -154,6 +154,9 @@ class FakeSonataStore(private val clock: () -> Long = { 1_000L }) : SonataStore 
 
     override suspend fun narration(id: Long): Narration? = narrations[id]
 
+    override suspend fun allNarrations(): List<Narration> =
+        narrations.values.sortedByDescending { it.createdAt }
+
     override suspend fun savePosition(narrationId: Long, positionMs: Long) {
         val n = narrations[narrationId] ?: return
         narrations[narrationId] = n.copy(playbackPositionMs = positionMs.coerceAtLeast(0))

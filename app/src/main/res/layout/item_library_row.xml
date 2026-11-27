@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  One saved narration.
+
+  Title and state only, plus a Play control that exists **only** when the audio
+  is on disk. The control is removed rather than disabled: a greyed Play button
+  beside a row the app cannot play still reads as an offer, and the whole point of
+  the rule is that the app does not make offers it cannot keep.
+-->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="horizontal"
+    android:gravity="center_vertical"
+    android:paddingTop="@dimen/space_sm"
+    android:paddingBottom="@dimen/space_sm">
+
+    <LinearLayout
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_weight="1"
+        android:orientation="vertical">
+
+        <TextView
+            android:id="@+id/tvRowTitle"
+            style="@style/Text.Sonata.Label"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:maxLines="1"
+            android:ellipsize="end"
+            android:textColor="@color/text_primary" />
+
+        <TextView
+            android:id="@+id/tvRowSubtitle"
+            style="@style/Text.Sonata.Label"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:textColor="@color/text_dim"
+            android:textSize="@dimen/text_meta" />
+    </LinearLayout>
+
+    <com.google.android.material.button.MaterialButton
+        android:id="@+id/btnRowPlay"
+        style="@style/Button.Sonata.Secondary"
+        android:layout_width="wrap_content"
+        android:layout_height="@dimen/touch_min"
+        android:minWidth="@dimen/touch_min"
+        android:text="@string/action_play" />
+</LinearLayout>
