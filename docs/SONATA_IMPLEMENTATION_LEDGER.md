@@ -655,3 +655,107 @@ to recur elsewhere from claiming another piece's request.
   but the claim is now stated correctly instead of being carried by a proxy.
 - **No device validation, no neural voice, no product behaviour change.** One test
   assertion changed; `app/src/main` is untouched.
+
+---
+
+## 9. S1 — a finished read and a failed read are now distinguishable (append-only)
+
+**Date:** 2026-11-27
+**Base:** `7c4e6a64e39e34685b06e2e1698cf9eb896b9720` (branch `fix/s1-tier-truth-001`, PR #9)
+**Parent of this change:** `ef6f979663a371123c194e7fbb917ef7a9c0b2f0`
+**Code commit:** `f32b3b8e2e0cea227d975d4992a2a44dc3369e1c`
+
+### 9.1 The defect
+
+The reading screen decided its state line from the engine alone:
+
+```kotlin
+binding.tvState.text = when {
+    playing && svc?.isBufferingNext == true -> getString(R.string.state_buffering)
+    playing -> getString(R.string.state_speaking)
+    paused -> getString(R.string.state_paused)
+    bound -> getString(R.string.state_ready)
+    else -> getString(R.string.state_starting)
+}
+```
+
+A read that reached the end of the passage and a read that failed both fall
+through to `bound -> "Ready"`, with the substate `"Paste text, or select some in
+any app"`. That is the same screen as one that was never used, so **the user is
+never told the read finished, and a failure is only ever a transient notice**.
+
+Neither fact is recoverable from the engine: `TtsEngine` has no completion state
+(it returns to idle), and `SpeechService` calls `stopSelf()` on both completion
+and terminal error, so the service is gone by the time the screen re-renders.
+`SpeechService.lastError` existed and was read by nobody.
+
+Two further consequences of the same shape:
+
+- **The synthesis wait was invisible.** Between `dispatch()` and the first audio
+  the engine is neither playing nor paused, so `render()` showed `Ready` — the
+  "inadequate visible synthesis/loading state" item in the S1 contract.
+- **The two lines could disagree.** The state and the substate were decided by
+  two independent `when` blocks, so any new state had to be added twice.
+
+### 9.2 The change
+
+| File | Role |
+|---|---|
+| `PlaybackPhase.kt` (new, pure JVM) | `PlaybackPhase`, `PlaybackObservation`, `PlaybackPhasePolicy.decide` — one decision over every input |
+| `MainActivity.kt` | records the read's own facts (`readPreparing`, `readCompleted`, `readFailure`), renders both lines from the single phase |
+| `values/strings.xml` | `state_completed`, `state_failed`, `substate_completed` |
+| `PlaybackPhaseTest.kt` (new, JVM) | 14 tests over the decision table and its precedence |
+| `narration-core/…/PlaybackPhaseWiringTest.kt` (new) | 2 wiring guards, including a negative control |
+
+Precedence, highest first: buffering → playing → paused → failed → completed →
+preparing → ready → starting. **Live playback outranks the terminal facts on
+purpose**: an error that fell back to the offline voice leaves a message behind
+while the read continues, and a stale `completed` must not hide a read that is
+running now.
+
+`onComplete` records completion *before* the service stops itself;
+`onServiceDisconnected` deliberately leaves it alone, because that disconnect is
+the normal consequence of `stopSelf()`. A deliberate `stopRead()` clears all
+three flags: an abandoned read is neither finished nor failed.
+
+### 9.3 Why the wiring guard is not beside the policy
+
+`ci/scope.py` derives the app module's JVM scope by class reference and excludes
+any file that names a class declared by an Android-bound file — **including
+inside a string literal**. A guard that names the reading screen was therefore
+`OUT` of the JVM job: measured, `python3 ci/scope.py | grep PlaybackPhaseTest`
+returned `OUT`, and the 16 new tests counted **0** in `total_tests`. It lives in
+`narration-core` instead, which `narration-core/build.sh` compiles in full and
+whose working directory is the module root.
+
+### 9.4 Evidence (run in this sandbox)
+
+A JDK and the Kotlin compiler were provisioned here (Temurin `17.0.21.1`,
+kotlinc `1.9.24`, jars from Maven Central and Google Maven), so the tracked
+harness ran locally rather than only in GitHub Actions.
+
+| Check | Command | Result |
+|---|---|---|
+| Baseline at `ef6f979`, clean tree | `bash ci/run-ci.sh --check` | `total_tests=447`, job1 exit 0, job2 exit 0 |
+| With the change | `bash ci/run-ci.sh --check` | `total_tests=463`, job1 exit 0, job2 exit 0 |
+| Attribution | `grep -c @Test` on the two new files | 14 + 2 = **16**, exactly the delta |
+| **Live negative control** — wiring stripped from the real screen | `./narration-core/build.sh` | `Tests run: 171, Failures: 1`, exit **1**, naming all three missing properties |
+| Restored, harness re-run | `bash ci/run-ci.sh --check` | `total_tests=463`, job1/job2 exit 0 |
+
+`ci-evidence.log` was deliberately **not** rewritten: the other open PR on this
+repository (#10) also rewrites it wholesale, so regenerating it here would make a
+guaranteed textual conflict in a file that carries no reasoning. The numbers
+above are the record; the log is regenerated by whoever merges last.
+
+### 9.5 Not claimed
+
+- **Not device-validated.** That a real screen paints these two lines is a device
+  observation that was not made here; the phase decision and the wiring are
+  verified as code and as source.
+- **Completion is lost if it happens while the screen is away.** `onStop()`
+  removes the client, so a read that finishes while the app is backgrounded
+  returns to `Ready`. Carrying the outcome in the service is impossible while
+  `onComplete` calls `stopSelf()`; changing that lifecycle is a separate slice,
+  not part of this one.
+- **No engine, model, or neural-tier change.** `EngineFactory` still has no
+  caller on this branch — that is #10's slice, not this one.
