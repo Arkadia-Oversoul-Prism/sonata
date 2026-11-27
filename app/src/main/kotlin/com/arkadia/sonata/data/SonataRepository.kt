@@ -1,6 +1,7 @@
 package com.arkadia.sonata.data
 
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 
 /**
@@ -178,6 +179,9 @@ class SonataRepository(
     suspend fun recoverInterrupted(): Int = narrations.markInterrupted()
 
     suspend fun narration(id: Long): Narration? = narrations.byId(id)
+
+    /** Every narration, newest first. The library screen's read path. */
+    suspend fun allNarrations(): List<Narration> = narrations.all().first()
 
     fun narrations(): Flow<List<Narration>> = narrations.all()
 

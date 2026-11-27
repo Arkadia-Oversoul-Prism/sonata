@@ -21,11 +21,23 @@ import android.view.inputmethod.InputMethodManager
 import android.widget.AdapterView
 import android.widget.ArrayAdapter
 import android.widget.SeekBar
+import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import com.arkadia.sonata.databinding.ActivityMainBinding
+import com.arkadia.sonata.data.DocumentTitle
+import com.arkadia.sonata.data.Narration
+import com.arkadia.sonata.data.SonataStore
+import com.arkadia.sonata.engine.NarrationOutcome
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.io.File
 
 /**
  * The whole application, on one screen.
@@ -57,6 +69,38 @@ class MainActivity : AppCompatActivity() {
     private var readingPassage = ""
 
     private var lastCheckpointAt = 0L
+
+    /**
+     * The offline engine, built on the first save and released with the screen.
+     *
+     * Before this field, [EngineFactory] was constructible but nothing in the app
+     * called it, so no user action could produce a stored narration. It is built
+     * lazily so that opening the app costs nothing until the user asks for a file.
+     */
+    private var narrationEngine: EngineFactory.Wired? = null
+
+    /** Runs the save off the main thread; cancelled when the screen goes away. */
+    private val saveScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+    private var savingNarration = false
+
+    /** The library's read path. Built on first use, never per row. */
+    private var libraryStore: SonataStore? = null
+
+    /** Plays a saved narration. Separate from the streaming read's own player. */
+    private val libraryPlayer = AndroidAudioPlayer()
+
+    /** Runs the library read off the main thread; cancelled with the screen. */
+    private val libraryScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+
+    /**
+     * Files that exist but would not decode, for this session only.
+     *
+     * A file that failed once will fail again, so the row stops offering it instead
+     * of letting the user tap into the same error. Not persisted: a new session gets
+     * a fresh attempt, because the cause may have been transient (a codec busy with
+     * another app, storage briefly unmounted).
+     */
+    private val unplayablePaths = mutableSetOf<String>()
 
     private val conn = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName, binder: IBinder) {
@@ -116,6 +160,7 @@ class MainActivity : AppCompatActivity() {
         requestNotificationPermissionIfNeeded()
         restoreLastPassage()
         consumeIncomingText(intent)
+        refreshLibrary()
     }
 
     override fun onNewIntent(intent: Intent?) {
@@ -349,6 +394,7 @@ class MainActivity : AppCompatActivity() {
 
         binding.btnResume.setOnClickListener { resumeRead() }
         binding.btnPaste.setOnClickListener { pasteFromClipboard() }
+        binding.btnSaveNarration.setOnClickListener { saveNarration() }
         binding.btnClear.setOnClickListener {
             binding.etText.setText("")
             rememberPassage()
@@ -527,6 +573,7 @@ class MainActivity : AppCompatActivity() {
             showNotice("Floating player enabled — tap Float to use it")
         }
         render()
+        refreshLibrary()
         if (speechService?.isPlaying == true || speechService?.isPaused == true) startTicker()
     }
 
@@ -766,6 +813,144 @@ class MainActivity : AppCompatActivity() {
                 .forEach { it.delete() }
             refreshStorageLabel()
         }
+    }
+
+    /**
+     * Save the current passage as a narration.
+     *
+     * This is the one place the screen reaches the offline engine. The work runs
+     * off the main thread, and the line the user reads comes from
+     * [NarrationPresenter] rather than being assembled here, so the "saved" claim
+     * is the same predicate the library uses before it offers audio for playback.
+     */
+    private fun saveNarration() {
+        if (savingNarration) return
+        val text = when (val validated = TextLimits.validate(binding.etText.text)) {
+            TextValidation.Empty -> {
+                showNotice(getString(R.string.empty_passage))
+                return
+            }
+
+            is TextValidation.Ready -> validated.text
+            is TextValidation.Truncated -> validated.text
+        }
+
+        val title = DocumentTitle.fromText(text)
+        savingNarration = true
+        binding.btnSaveNarration.isEnabled = false
+        binding.tvSaveNarrationState.text = getString(R.string.save_narration_working)
+
+        saveScope.launch {
+            val outcome = try {
+                val wired = narrationEngine ?: withContext(Dispatchers.IO) {
+                    EngineFactory.create(applicationContext)
+                }.also { narrationEngine = it }
+                withContext(Dispatchers.IO) {
+                    wired.engine.narrate(text = text, title = title)
+                }
+            } catch (e: Exception) {
+                NarrationOutcome.Failure("Saving failed: ${e.javaClass.simpleName}")
+            }
+
+            val report = NarrationPresenter.report(outcome, title)
+            binding.tvSaveNarrationState.text = report.message
+            binding.btnSaveNarration.isEnabled = true
+            savingNarration = false
+            showNotice(report.message)
+            // The point of saving is having it. Without this the row the user just
+            // created is invisible until the next screen resume.
+            if (report.saved) refreshLibrary()
+        }
+    }
+
+    /**
+     * Render the saved narrations.
+     *
+     * The rows come from [LibraryPresenter], so the screen does not decide what is
+     * playable — it draws what the presenter says is. That keeps the one rule that
+     * matters ("offer audio only when the file is there") in a function with tests,
+     * rather than in a view callback no test can reach.
+     */
+    private fun refreshLibrary() {
+        libraryScope.launch {
+            val store = libraryStore ?: withContext(Dispatchers.IO) {
+                EngineFactory.store(applicationContext)
+            }.also { libraryStore = it }
+
+            val narrations = try {
+                withContext(Dispatchers.IO) { store.allNarrations() }
+            } catch (e: Exception) {
+                // A library that cannot be read is empty, not a crash: the screen is
+                // still usable for reading and saving.
+                Log.w(TAG, "library read failed: ${e.javaClass.simpleName}")
+                emptyList()
+            }
+            renderLibrary(narrations)
+        }
+    }
+
+    private fun renderLibrary(narrations: List<Narration>) {
+        val rows = LibraryPresenter.rows(narrations) { path -> isPlayableFile(path) }
+        val byId = narrations.associateBy { it.id }
+
+        binding.libraryList.removeAllViews()
+        binding.tvLibrarySummary.text = LibraryPresenter.summary(rows)
+
+        rows.forEach { row ->
+            val view = layoutInflater.inflate(R.layout.item_library_row, binding.libraryList, false)
+            view.findViewById<TextView>(R.id.tvRowTitle).text = row.title
+            view.findViewById<TextView>(R.id.tvRowSubtitle).text = row.subtitle
+
+            val play = view.findViewById<com.google.android.material.button.MaterialButton>(R.id.btnRowPlay)
+            val path = byId[row.id]?.audioPath
+            if (row.offer == LibraryOffer.REPLAY && path != null) {
+                play.setOnClickListener { replay(path) }
+            } else {
+                play.visibility = View.GONE
+            }
+            binding.libraryList.addView(view)
+        }
+    }
+
+    /** A row is offered only when the file is there *and* has not just failed. */
+    private fun isPlayableFile(path: String): Boolean =
+        path !in unplayablePaths && File(path).exists()
+
+    /**
+     * Play a saved narration from disk.
+     *
+     * The passage read is stopped first: two players on one speaker is the overlap
+     * the playback contract forbids, and the user has just asked for this one.
+     */
+    private fun replay(path: String) {
+        stopRead()
+        libraryPlayer.stop()
+        val started = libraryPlayer.play(
+            File(path),
+            // Re-reading on completion keeps the summary honest and releases nothing
+            // the screen still needs: the player is stopped on the next play or in
+            // onDestroy.
+            onCompletion = { refreshLibrary() },
+            onError = { showNotice(getString(R.string.library_play_failed)) },
+        )
+        if (started) {
+            showNotice(getString(R.string.library_playing))
+        } else {
+            showNotice(getString(R.string.library_play_failed))
+            // The file the row pointed at could not be decoded. Re-render so the row
+            // stops offering it rather than failing again on the next tap.
+            unplayablePaths += path
+            refreshLibrary()
+        }
+    }
+
+    override fun onDestroy() {
+        saveScope.cancel()
+        libraryScope.cancel()
+        libraryPlayer.stop()
+        narrationEngine?.shutdown()
+        narrationEngine = null
+        super.onDestroy()
     }
 
     private companion object {

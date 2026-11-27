@@ -275,6 +275,49 @@ class RegressionTest {
         assertTrue("manifest policy failures: ${r.failures.map { it.code }}", r.passed)
     }
 
+    // ---- R14: the offline engine was constructible but no screen invoked it ----
+    //
+    // EngineFactory could build the production engine, and the engine's own tests
+    // proved it saved a narration, but nothing in the app called it — so no user
+    // action could produce a stored file. A correct component that nothing
+    // constructs is not a feature. This guard is the one that notices if the wiring
+    // is removed: the screen must construct the engine, narrate, and route the
+    // result through the presenter whose tests pin the "saved" claim.
+
+    @Test
+    fun `R14 the screen reaches the offline engine`() {
+        val activity = locateSource(MAIN_ACTIVITY_CANDIDATES)
+        assertNotNull(
+            "MainActivity.kt must be readable from the test working directory; " +
+                "searched: ${MAIN_ACTIVITY_CANDIDATES.joinToString()}",
+            activity
+        )
+        val source = activity!!.readText()
+        assertTrue(
+            "the screen must construct the production engine",
+            source.contains("EngineFactory.create(")
+        )
+        assertTrue("the screen must actually narrate", source.contains(".narrate("))
+        assertTrue(
+            "the save report must come from the tested presenter",
+            source.contains("NarrationPresenter.report(")
+        )
+
+        val layout = locateSource(LAYOUT_CANDIDATES)
+        assertNotNull(
+            "activity_main.xml must be readable from the test working directory; " +
+                "searched: ${LAYOUT_CANDIDATES.joinToString()}",
+            layout
+        )
+        assertTrue(
+            "the save action must have a control the user can reach",
+            layout!!.readText().contains("btnSaveNarration")
+        )
+    }
+
+    private fun locateSource(candidates: List<String>): File? =
+        candidates.map { File(it) }.firstOrNull { it.isFile }
+
     private fun locateShippedManifest(): File? =
         MANIFEST_CANDIDATES.map { File(it) }.firstOrNull { it.isFile }
 
@@ -288,6 +331,17 @@ class RegressionTest {
             "src/main/AndroidManifest.xml",
             "../app/src/main/AndroidManifest.xml",
             "app/src/main/AndroidManifest.xml",
+        )
+
+        /** The screen and its layout, relative to the module or the repo root. */
+        val MAIN_ACTIVITY_CANDIDATES = listOf(
+            "../app/src/main/kotlin/com/arkadia/sonata/MainActivity.kt",
+            "app/src/main/kotlin/com/arkadia/sonata/MainActivity.kt",
+        )
+
+        val LAYOUT_CANDIDATES = listOf(
+            "../app/src/main/res/layout/activity_main.xml",
+            "app/src/main/res/layout/activity_main.xml",
         )
     }
 
@@ -337,6 +391,49 @@ class RegressionTest {
         } finally {
             dir.deleteRecursively()
         }
+    }
+
+    // ---- R15: the library could not be read, so a saved narration could not be replayed ----
+    //
+    // R14 made the engine reachable, which meant a user could save a narration. But
+    // nothing listed what had been saved, so "Save -> Catalogue -> Replay" stopped at
+    // the first step and the file was write-only. The screen now reads the library and
+    // offers each row through the tested presenter — the presenter is what decides a
+    // row is playable, because the database saying COMPLETE is not proof the file is
+    // there. This guard notices if either half is removed.
+
+    @Test
+    fun `R15 the screen lists saved narrations and replays them`() {
+        val activity = locateSource(MAIN_ACTIVITY_CANDIDATES)
+        assertNotNull(
+            "MainActivity.kt must be readable from the test working directory; " +
+                "searched: ${MAIN_ACTIVITY_CANDIDATES.joinToString()}",
+            activity
+        )
+        val source = activity!!.readText()
+        assertTrue(
+            "the screen must read the library it writes to",
+            source.contains("allNarrations(")
+        )
+        assertTrue(
+            "the offer must come from the tested presenter, not from the view",
+            source.contains("LibraryPresenter.rows(")
+        )
+        assertTrue(
+            "a saved narration must actually be played from its file",
+            source.contains("libraryPlayer.play(")
+        )
+
+        val layout = locateSource(LAYOUT_CANDIDATES)
+        assertNotNull(
+            "activity_main.xml must be readable from the test working directory; " +
+                "searched: ${LAYOUT_CANDIDATES.joinToString()}",
+            layout
+        )
+        assertTrue(
+            "the list must have a place on the screen",
+            layout!!.readText().contains("libraryList")
+        )
     }
 
     // ---- R14: thermal governor oscillated ----

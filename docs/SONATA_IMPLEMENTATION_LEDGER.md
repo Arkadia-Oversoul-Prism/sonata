@@ -484,3 +484,236 @@ The 418 - 405 = 13 delta is exactly the new `TextNormalizerCaseTest` nodes
   without addressing the heading defect.
 - No engine, model, playback, or UI change. `EngineFactory` is still not called
   from the UI, which remains the next slice.
+
+---
+
+## 9. S4a — the screen reaches the offline engine (append-only)
+
+**Date:** 2026-11-27
+**Base:** `7c4e6a64e39e34685b06e2e1698cf9eb896b9720` (default branch `feature/sonata-tts-app`)
+**Branch:** `feat/save-narration-reachable-01`
+
+### 9.1 The defect
+
+§8.4 ended with the next slice named: *"`EngineFactory` is still not called from
+the UI."* It was not a note about polish. `grep -rn EngineFactory app/src`
+returned exactly one hit — the definition — so the production engine that saves
+a narration was constructible and tested but **unreachable**. No user action
+could produce a stored file. `SONATA_KNOWN_LIMITATIONS.md` L1 item 3 said the
+same thing, and §7.3 had already named the class: *"A correct component that
+nothing constructs is not a feature."*
+
+### 9.2 The change
+
+| File | Role |
+|---|---|
+| `NarrationPresenter.kt` (new, JVM) | Turns a `NarrationOutcome` into the one line the user reads, and the `saved` flag the library may build on |
+| `NarrationPresenterTest.kt` (new, JVM) | 4 tests, including a negative control for a Success that names no file |
+| `MainActivity.kt` | `saveNarration()`: builds the engine lazily, narrates off the main thread, reports through the presenter; `onDestroy` cancels the scope and shuts the engine down |
+| `activity_main.xml` | One `Save narration` control and its state line, in the existing Storage section |
+| `strings.xml` | Two strings |
+| `RegressionTest.kt` | **R14** — a source guard that fails if the wiring is removed |
+
+The save action reuses `TextLimits.validate` for the blank/oversized contract and
+`DocumentTitle.fromText` for the title, so the screen adds no new text rules. The
+engine is built on first use, not at startup, and released in `onDestroy`.
+
+**Why the `saved` claim lives in the presenter, not the screen.** The engine only
+returns `Success` after the WAV is written, but the report does not take that on
+trust: a `Success` whose `audioPath` is blank is reported as a failure. "Saved" is
+the claim that a file exists — the same predicate `LibraryRules.isPlayable`
+applies to a row before it is offered for playback. Putting it in a pure function
+is what makes it testable without a device.
+
+### 9.3 Evidence (this sandbox: JDK 21 + kotlinc 1.9.24 provisioned here)
+
+The tracked harness ran locally, not only in GitHub Actions.
+
+| Check | Command | Result |
+|---|---|---|
+| Base, before any change | `bash ci/run-ci.sh --check` | `total_tests=441`, job1/job2 exit 0 |
+| With the presenter + tests | `bash ci/run-ci.sh --check` | `total_tests=445`, job1/job2 exit 0 |
+| With the R14 guard | `bash ci/run-ci.sh --check` | **`total_tests=446`**, job1/job2 exit 0 |
+
+`445 - 441 = 4` is exactly the new `NarrationPresenterTest` nodes; `446 - 445 = 1`
+is exactly `R14`. Neither is inferred from the delta — `ci/scope.py` classifies
+both new files (`MAIN` / `TEST`).
+
+**Negative controls, both live on the real files and both restored byte-identically.**
+
+| Control | Edit | Result |
+|---|---|---|
+| The saved-claim guard is load-bearing | `if (outcome.audioPath.isBlank())` → `if (false)` | job 1 **exit 1**, and `JUnitCore` on the class names `1) a_success_with_no_path_is_not_reported_as_saved` |
+| The wiring guard is load-bearing | `wired.engine.narrate(` → `wired.engine.speak(` | job 2 **exit 1**, `1) R14 the screen reaches the offline engine` at `RegressionTest.kt:300` |
+
+Restored: `diff` against the backup was empty, `grep -c "wired.engine.narrate("`
+returned 1, and the harness returned to `total_tests=446`.
+
+### 9.4 Not claimed
+
+- **The Android sources were not compiled here.** There is no Android SDK in this
+  sandbox, so `MainActivity.kt`, `EngineFactory.kt` and the layout are `OUT` of the
+  JVM scope. The compile and APK evidence is GitHub Actions
+  (`ci.yml`, `build-apk.yml`), not this entry.
+- **No device validation.** That a real device's `TextToSpeech` engine writes the
+  file is **UNVERIFIED** here; the adapter is tested on the JVM against a double.
+- **No catalogue UI.** A saved narration is written and recorded, but no screen
+  lists the library yet, so "Save → Catalogue → Replay" is only half reached. This
+  entry does not claim the library is browsable.
+- **No neural voice.** The registry is still empty; this speaks in the platform
+  voice, which is the honest current tier.
+
+### 9.5 CI, observed on `29cb245a` (PR #10)
+
+| Check | Run | Result |
+|---|---|---|
+| JVM verification (app core + narration core) | `45965117961` | **success** |
+| Build Release APK + instrumented tests | `45965306042` (`pull_request`) | **success** |
+| Build Release APK (first, `push`) | `45965117945` | failure — not attributable |
+
+The first APK run failed in `Run unit tests` with `397 tests completed, 29 failed`,
+and **all 29** carry `java.lang.AssertionError at MavenArtifactFetcher.java:129` →
+`IOException at HttpURLConnection.java:2059`: Robolectric could not download its
+`android-all` jar. The 29 are 23 `SonataRepositoryTest` + 6
+`FloatingOverlayServiceTest`; `NarrationPresenterTest` is not among them, and the
+base branch passed the same workflow twice earlier the same day. It is runner
+infrastructure, not this branch.
+
+**That red still settled the compile question.** In the same run
+`> Task :app:compileDebugKotlin` and `> Task :app:compileDebugUnitTestKotlin`
+both succeeded, and the retry passed the whole job including instrumented tests.
+So `MainActivity.kt`, the layout and the new test compile — which the local JVM
+harness cannot show, because the Android sources are `OUT` of its scope.
+
+Recorded as **both a red and a green at one SHA**: `gh pr checks` reports only
+the latest run, so reading it alone would have hidden the transient failure (and
+reading only the red would have wrongly blamed the branch).
+
+### 9.6 Composition with the open PR #9
+
+Measured in a detached worktree by `git merge --no-edit origin/fix/s1-tier-truth-001`:
+
+- `MainActivity.kt`, `activity_main.xml`, `strings.xml`, `RegressionTest.kt`
+  **auto-merged**; no conflicted source file.
+- Only the two append-only logs conflicted (`ci-evidence.log`,
+  `docs/SONATA_IMPLEMENTATION_LEDGER.md`). Resolved by keeping #9's
+  `### Stage S1a` under section 8, then this branch's `## 9.` after it.
+- Composed tree: **`total_tests=452`, job1/job2 exit 0** —
+  `441 + 6 (#9) + 5 (this branch) = 452`, zero failures.
+
+Merge order is the human's. Whichever lands second re-runs the harness and
+re-appends both logs; the source itself composes cleanly.
+
+### 9.7 The push-run/PR-run split reproduced (head `921cf8e`)
+
+The pattern in §9.5 is not a one-off. At the docs-only head `921cf8e`:
+
+| Run | Event | Build Release APK | Instrumented tests |
+|---|---|---|---|
+| `45965932325` | `pull_request` | **success** | **success** |
+| `45965940901` | `push` | **failure** | success |
+
+The failing job carries **29** `MavenArtifactFetcher` occurrences again — the same
+count, the same `SonataRepositoryTest` / `FloatingOverlayServiceTest` failures,
+the same `compileDebugKotlin` success. So on this repository the `push`-event
+build is red on a Robolectric artifact download while the `pull_request`-event
+build of the identical tree is green, twice over.
+
+**Consequence for reading CI here:** the `pull_request` run is the one that gates
+the PR, and it is green. A red `push` run at the same SHA is not evidence about
+the tree. Do not "fix" it in a feature branch — it is runner infrastructure, and
+the fix (a pre-warmed Robolectric cache or a pinned `android-all` jar) is a
+separate bounded change.
+
+---
+
+## 10. S4b — the library could not be read, so a saved narration could not be replayed (append-only)
+
+### 10.1 The defect
+
+S4a made `EngineFactory` reachable, so a user could save a narration. Nothing
+listed what had been saved:
+
+```
+$ grep -rn "all()\|recent(\|narrations()" app/src/main/kotlin/com/arkadia/sonata/MainActivity.kt
+(no match)
+```
+
+The `NarrationDao` had `all(): Flow<List<Narration>>` and the repository had no
+read path on the `SonataStore` seam at all, so the screen could write audio and
+never show it. "Generate → Save → Catalogue → Replay" stopped at the second step,
+and `SONATA_KNOWN_LIMITATIONS.md` L1 item 3 said so.
+
+### 10.2 The change
+
+| File | Role |
+|---|---|
+| `LibraryPresenter.kt` (new, JVM) | Rows and their offer, from stored narrations |
+| `LibraryPresenterTest.kt` (new, JVM) | 10 tests, including the two negative controls below |
+| `SonataStore.kt` | `allNarrations()` — the read path |
+| `SonataRepository.kt`, `RepositoryStore.kt` | The implementation and the seam |
+| `FakeSonataStore.kt` | The same read path for the JVM tests |
+| `EngineFactory.kt` | `store(context)`, and `Wired.store` so the screen reads the store the engine wrote to |
+| `MainActivity.kt` | Renders the rows, replays a file, stops the passage read first |
+| `activity_main.xml`, `item_library_row.xml`, `strings.xml` | The list and one row |
+| `RegressionTest.kt` | **R15** — a source guard on the read, the presenter and the replay |
+
+The rule the presenter exists to hold: **a row is offered for replay only when
+`LibraryRules.isPlayable` holds AND the file is on disk.** A `COMPLETE` row is not
+proof the audio survived — storage can be cleared, or a write interrupted after
+the row was updated. `audioExists` is injected so the rule is a pure function and
+the tests can disagree with the disk on purpose.
+
+The screen does not decide any of this. It draws what the presenter says, so the
+only rule that matters is in a function a test can reach, not in a view callback.
+
+Two smaller decisions, both recorded because they are choices:
+
+- **The Play control is removed, not disabled, on a row that cannot play.** A
+  greyed button beside a row the app cannot play still reads as an offer.
+- **A file that failed to decode is dropped from the offers for the session.** A
+  file that failed once will fail again; the set is not persisted, because the
+  cause may have been transient.
+
+### 10.3 Evidence (this sandbox: JDK 21 + kotlinc 1.9.24 provisioned here)
+
+Base `84aa83b` (PR #10's head) → head `1178132`.
+
+| Check | Command | Base | Head |
+|---|---|---|---|
+| Tracked harness | `./ci/run-ci.sh --check` | `total_tests=446`, PASS | **`total_tests=457`, PASS** |
+| Evidence log | `./ci/run-ci.sh` at `1178132` | — | `dirty_files=0`, `job1_exit=0`, `job2_exit=0` |
+| Architecture / scope | `python3 ci/scope.py` | — | `LibraryPresenter.kt` MAIN, `LibraryPresenterTest.kt` TEST |
+
+`457 - 446 = 11` is exactly the new nodes: `10` in `LibraryPresenterTest` (job 1)
+and `1` for `R15` (job 2). Measured by running job 1 alone (`Tests run: 286`, of
+which `LibraryPresenterTest` contributes 10) rather than inferred from the delta.
+
+### 10.4 Negative controls (live on the real files, both restored byte-identically)
+
+| Control | Edit | Result |
+|---|---|---|
+| The file check is load-bearing | drop `&& audioExists(...)` from `LibraryPresenter.rows` | job 1 **exit 1** — `3` failures: *a complete narration whose file is gone is not offered*, *a playable row carries its duration*, *the summary counts what can be played* |
+| The wiring guard is load-bearing | `libraryPlayer.play(` → `libraryPlayer.pause(` | job 2 **exit 1**, `R15 the screen lists saved narrations and replays them` |
+
+Restored: `sha256` of `LibraryPresenter.kt` `812dc43c…` and `MainActivity.kt`
+`eff5ac4b…` identical before and after, harness back to `total_tests=457`.
+
+The first control is the one that matters: without the file check the tests fail
+*by name* on the property the presenter exists for, not on a count.
+
+### 10.5 Not claimed
+
+- **The Android sources are `OUT` of the JVM harness** (this sandbox has no
+  Android SDK). `MainActivity.kt`, the two layouts and `strings.xml` are compiled
+  by CI (`build-apk.yml`: `compileDebugKotlin`, `compileDebugUnitTestKotlin`,
+  release APK), not here. `LibraryPresenter`, the store seam and the fake are
+  compiled and run here.
+- **No device validation.** That a device plays a saved file through
+  `AndroidAudioPlayer` is **UNVERIFIED**; the player's behaviour is tested on the
+  JVM against a double, and the file is played by `MediaPlayer` on a device.
+- **No management actions.** Rename, delete, favourite, collections and export
+  have no UI. The rules and the store operations exist and are tested; the screen
+  exposes none of them.
+- **No resume from a stored position.** `Narration.playbackPositionMs` is not yet
+  consulted by the library row.

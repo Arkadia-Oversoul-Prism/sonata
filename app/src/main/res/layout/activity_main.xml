@@ -347,6 +347,53 @@
                     android:layout_marginTop="@dimen/space_xs"
                     android:background="?attr/selectableItemBackground" />
 
+                <!-- Save: the one action that reaches the offline engine. It writes
+                     the passage to a WAV in app-private storage and records the
+                     narration, so the read survives the app being closed. -->
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/btnSaveNarration"
+                    style="@style/Button.Sonata.Secondary"
+                    android:layout_width="match_parent"
+                    android:layout_height="@dimen/touch_primary"
+                    android:layout_marginTop="@dimen/space_sm"
+                    android:text="@string/action_save_narration" />
+
+                <TextView
+                    android:id="@+id/tvSaveNarrationState"
+                    style="@style/Text.Sonata.Label"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="@dimen/space_xs"
+                    android:textColor="@color/text_dim"
+                    android:textSize="@dimen/text_meta" />
+
+                <!-- ── Saved narrations ─────────────────────────────────────
+                     What the user has kept, newest first. The screen renders rows;
+                     LibraryPresenter decides which of them may be played, because
+                     "the database says complete" is not proof the file is there. -->
+                <TextView
+                    style="@style/Text.Sonata.Section"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="@dimen/space_xl"
+                    android:text="@string/section_library" />
+
+                <TextView
+                    android:id="@+id/tvLibrarySummary"
+                    style="@style/Text.Sonata.Label"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="@dimen/space_xs"
+                    android:textColor="@color/text_dim"
+                    android:textSize="@dimen/text_meta" />
+
+                <LinearLayout
+                    android:id="@+id/libraryList"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="@dimen/space_xs"
+                    android:orientation="vertical" />
+
                 <TextView
                     android:id="@+id/tvBackend"
                     style="@style/Text.Sonata.Label"

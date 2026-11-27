@@ -28,6 +28,8 @@
 
     <string name="action_read">Read aloud</string>
     <string name="action_read_again">Read again</string>
+    <string name="action_save_narration">Save narration</string>
+    <string name="save_narration_working">Saving narration…</string>
     <string name="action_more">More options</string>
     <string name="action_float">Float over other apps</string>
     <string name="action_paste">Paste</string>
@@ -50,4 +52,9 @@
     <string name="action_hear_voice_desc">Hear a sample of the selected voice</string>
     <string name="preview_playing">Playing a sample…</string>
     <string name="preview_failed">The sample could not be played</string>
+
+    <string name="section_library">Saved narrations</string>
+    <string name="action_play">Play</string>
+    <string name="library_play_failed">That audio could not be played</string>
+    <string name="library_playing">Playing a saved narration\u2026</string>
 </resources>
