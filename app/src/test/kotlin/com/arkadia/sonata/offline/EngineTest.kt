@@ -1,5 +1,6 @@
 package com.arkadia.sonata.offline
 
+import com.arkadia.sonata.data.LibraryRules
 import com.arkadia.sonata.data.NarrationStatus
 import com.arkadia.sonata.engine.BaseSpeechModel
 import com.arkadia.sonata.engine.BundledModels
@@ -219,6 +220,66 @@ class EngineTest {
         assertEquals(1, repo.narrations().size)
         assertEquals("Keep my title", repo.narration(id)?.title)
         assertEquals(NarrationStatus.COMPLETE, repo.narration(id)?.status)
+    }
+
+    // ── Empty audio is not stored audio ──────────────────────────────────────
+    //
+    // A model that returns `Success` with no samples is not a model that spoke.
+    // Both completion paths must refuse it, and the refusal must leave the row
+    // FAILED: `LibraryRules.isPlayable` only asks for COMPLETE plus a non-blank
+    // path, so a header-only WAV would be offered to the user as their narration.
+    // `retry` had no such check while `narrate` did, which is how a 44-byte
+    // silence could be presented as stored audio.
+
+    @Test
+    fun `narrate refuses a model that produced no audio`() = runBlocking {
+        val repo = FakeSonataStore()
+        val store = DirectoryFileStore(tempDir())
+        val model = testModel()
+        val engine = OfflineEngine(
+            repository = repo,
+            fileStore = store,
+            registry = registry(model),
+            device = device(),
+            modelProvider = FakeModelProvider(FakeSpeechModel(model, pcm = ByteArray(0))),
+        )
+
+        val outcome = engine.narrate("Text.", "Silent")
+
+        assertTrue(outcome is NarrationOutcome.Failure)
+        assertEquals("The model produced no audio", (outcome as NarrationOutcome.Failure).reason)
+        val row = repo.narrations().single()
+        assertEquals(NarrationStatus.FAILED, row.status)
+        assertFalse(LibraryRules.isPlayable(row))
+        assertTrue(store.allIds().isEmpty())
+    }
+
+    @Test
+    fun `retry refuses a model that produced no audio`() = runBlocking {
+        val repo = FakeSonataStore()
+        val store = DirectoryFileStore(tempDir())
+        val model = testModel()
+        val engine = OfflineEngine(
+            repository = repo,
+            fileStore = store,
+            registry = registry(model),
+            device = device(),
+            modelProvider = FakeModelProvider(FakeSpeechModel(model, pcm = ByteArray(0))),
+        )
+        val id = repo.beginNarration(null, "Silent retry")
+        repo.markGenerating(id)
+        repo.recoverInterrupted()
+
+        val outcome = engine.retry(id, "Text again.")
+
+        assertTrue(outcome is NarrationOutcome.Failure)
+        assertEquals("The model produced no audio", (outcome as NarrationOutcome.Failure).reason)
+        val row = repo.narration(id)!!
+        // Not COMPLETE: a header-only WAV is not stored audio.
+        assertEquals(NarrationStatus.FAILED, row.status)
+        assertFalse(LibraryRules.isPlayable(row))
+        // And nothing was written, so there is no file to play or export.
+        assertTrue(store.allIds().isEmpty())
     }
 
     @Test
