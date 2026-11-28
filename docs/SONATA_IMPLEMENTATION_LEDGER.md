@@ -484,3 +484,83 @@ The 418 - 405 = 13 delta is exactly the new `TextNormalizerCaseTest` nodes
   without addressing the heading defect.
 - No engine, model, playback, or UI change. `EngineFactory` is still not called
   from the UI, which remains the next slice.
+
+---
+
+## 9. S3 — the reading position belongs to a document (append-only)
+
+**Date:** 2026-11-28
+**Base:** `7c4e6a64e39e34685b06e2e1698cf9eb896b9720` (branch `feature/sonata-tts-app`)
+
+### 9.1 The defect
+
+S3's acceptance list names **persistent reading position** and **resume after
+process death** for a *library of documents*. The app had one position for one
+passage: `Prefs.lastPassage` and `Prefs.lastSpokenChars` are single values. Reading
+document B therefore overwrote the position in document A, and returning to A
+offered nothing — indistinguishable, from the user's side, from A never having been
+opened.
+
+The rule for *whether* a stored offset may be applied was never wrong;
+`ResumePoint` already decides that, and it is unchanged. What was missing is the
+key: a position describes a document.
+
+### 9.2 The rule
+
+`reading/ReadingPositions.kt` adds a pure, bounded, versioned store of
+`ReadingPosition(documentId, offsetChars, passageLength, passageFingerprint,
+recordedAt)`.
+
+| Property | Where it is enforced |
+|---|---|
+| A position is keyed by document, one per document | `remember` upserts on `documentId` |
+| An edited document resumes from the top | `offsetFor` requires the stored length **and** fingerprint to match the text in front of the user |
+| "Nothing left worth resuming", "past the end", "not started" | delegated to `ResumePoint.offset` — not restated, so there is one authority |
+| The store cannot grow without bound | newest `MAX_ENTRIES` (32) kept; eviction costs a lost place, never a wrong one |
+| A deleted document leaves no position | `forget` |
+| A corrupted preference cannot crash or be trusted | `decode` is total: unreadable entries are dropped, readable ones kept, unknown versions yield nothing |
+
+`encode`/`decode` live in the same object rather than in the preference layer, so
+the stored format has exactly one implementation and it is the one under test.
+
+### 9.3 Evidence (run in this sandbox)
+
+A JDK and the Kotlin compiler were provisioned here (OpenJDK `21.0.13`,
+kotlinc `1.9.22`, jars from `repo1.maven.org` and Google Maven), so the tracked
+harness ran locally rather than only in GitHub Actions.
+
+| Check | Command | Result |
+|---|---|---|
+| Harness on the base commit, before the change | `bash ci/run-ci.sh --check` | `total_tests=441`, job1/job2 exit 0 |
+| Harness with the rule and its tests | `bash ci/run-ci.sh --check` | `total_tests=465`, job1/job2 exit 0 |
+| New test class alone | `java … org.junit.runner.JUnitCore com.arkadia.sonata.reading.ReadingPositionsTest` | `OK (24 tests)` |
+| **Negative control** — `offsetFor` made to ignore `documentId` (the pre-change global lookup) | same targeted run | `Tests run: 24, Failures: 2` — both cross-document tests |
+| Implementation restored | targeted run | `OK (24 tests)` |
+
+The 465 − 441 = 24 delta is exactly the new `ReadingPositionsTest` nodes
+(`ci/scope.py` puts the new file in `MAIN` and its test in `TEST`; neither is in the
+excluded set, so the delta is attributable rather than inferred).
+
+The negative control is the load-bearing part. A test suite for this feature that
+passes with a global lookup is a suite that does not test the feature; the pre-change
+semantics are reproduced above and fail exactly the two nodes that name two
+documents.
+
+### 9.4 Not claimed
+
+- **No screen uses it yet.** `Prefs` still stores the single global passage, and
+  `MainActivity` still reads it, because that screen has no document concept. This
+  PR adds the rule layer and its tests; wiring the library screen to it is the next
+  slice. Nothing user-facing changed, and the README's claim classification is
+  unchanged by this entry.
+- **Not device-validated.** Nothing here touches the Android runtime, so there is
+  nothing a device could confirm beyond what the JVM tests already do.
+- **The fingerprint is not cryptographic.** It stands in for "is this the same
+  text?" alongside the length check. A collision would resume into the wrong place;
+  storing the passage itself was rejected because it would duplicate every document
+  into the preference file. The offset that is actually applied is bounded by the
+  length check, and the rule that declines an uncertain resume is unchanged.
+- **Migrations are untouched.** No schema change, so L11 (Room migrations untested)
+  stays exactly as it was.
+- **Bookmarks remain absent.** "Bookmarks or equivalent navigation" is a separate
+  S3 criterion and is not addressed by this entry.

@@ -163,6 +163,8 @@ that assert the split happens. The split is therefore **tested**. It has not bee
 | L21 | The retry backoff and the notification ticker are timing-dependent and are proven only on the JVM scheduler and the emulator, never on hardware |
 | L22 | `normaliseNumbers` deliberately does not spell out arbitrary numbers as words; "21st" is left as digits because a full number-to-words implementation is locale-dependent and a wrong expansion is worse than the digits |
 | L23 | The year rule is bounded 1900–2099, so a year like 1066 is read as digits. This is a deliberate trade: the wider range split prices like `1250` into `12 50` |
+| L24 | The per-document reading position exists as a tested rule (`reading/ReadingPositions`) but **no screen and no preference key uses it yet**. `Prefs` still holds one global passage, so a library of documents still shares one "carry on" affordance until the library screen is wired to it |
+| L25 | Bookmarks — S3's "bookmarks or equivalent navigation" — are **absent**. There is no bookmark model, no bookmark rule, and no navigation by position |
 
 ---
 

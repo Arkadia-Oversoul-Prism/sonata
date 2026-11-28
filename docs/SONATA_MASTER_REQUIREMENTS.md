@@ -67,6 +67,7 @@ status is one of:**
 | FR-18 | The floating overlay stays alive over other apps | `FloatingOverlayServiceTest` | NOT RUN (Robolectric) |
 | FR-19 | The library persists across launches | `SonataRepositoryTest` | NOT RUN (Room) |
 | FR-20 | Speech is actually produced on a device | — | ABSENT (no engine) |
+| FR-21 | A reading position belongs to a document, not to the app | `ReadingPositionsTest` (24 tests) | EXECUTED — **rule only**; no screen or preference key uses it yet (L24) |
 
 **FR-20 is the honest headline.** No speech engine is bundled or implemented in this
 tree. See §5 and `SONATA_KNOWN_LIMITATIONS.md`.
