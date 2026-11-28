@@ -256,3 +256,26 @@ Not device-validated: that a real screen paints `Completed` after returning is a
 device observation. What is verified is the adoption rule (10 JVM tests), the record's
 round trip through `Prefs`, and the wiring (3 source guards with two negative
 controls). See `SONATA_IMPLEMENTATION_LEDGER.md` §10.
+
+### L24 — a failed voice sample still paints the read's line as failed, live
+
+**Added 2026-11-28 (PR #9, stage S1e).**
+
+Auditioning a voice supersedes the read, so the sample and the passage share one
+listener. §12 of the ledger repaired the **stored** outcome: a sample's failure is no
+longer recorded as the passage's, so a passage the user merely interrupted is not
+reported as having failed when they come back.
+
+What is **not** repaired is the live line. `Client.onError` still delivers the sample's
+message to the bound screen, which sets `readFailure` and can paint
+`PlaybackPhase.FAILED` — "the read stopped" — while the thing that failed was the
+sample. The two symptoms are the same root cause and different surfaces; only the one
+that outlives the session was in scope.
+
+**Consequence.** During a failed sample the screen can misdescribe what failed. Nothing
+is persisted from it, and the passage is not offered as resumable-failed afterwards.
+
+**What it would take.** A client callback that names what failed (or the same in-flight
+fact passed to clients), so the screen can say "the sample could not be played" without
+inventing a read failure. That changes the `SpeechService.Client` contract, which both
+`MainActivity` and `FloatingOverlayService` implement, so it is its own bounded change.

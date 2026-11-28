@@ -906,3 +906,100 @@ that was never asked for.
   so the wiring is proven by compilation in the APK/emulator CI jobs, not here.
 - **No engine, model, transport or playback change.** The wait is presented and
   bounded; how long synthesis actually takes is unchanged and unmeasured here.
+
+## 12. S1 — a terminal event belongs to what is in flight, not to a boolean (append-only)
+
+**Date:** 2026-11-28
+**Base:** `b9bbf845394d7a7efbce49b0e0850a325f240363` (branch `fix/s1-tier-truth-001`, PR #9)
+**Continued, not duplicated:** this is the invariant §10 states and does not hold.
+
+### 12.1 The defect
+
+§10 recorded the rule — "a preview's failure is not a read's, so it is not recorded"
+— and implemented it with a boolean:
+
+```kotlin
+private var reading = false      // "true from the moment a read is dispatched"
+...
+if (reading) prefs.rememberOutcome(currentText, FAILED, msg)
+```
+
+A boolean cannot answer the question it is asked. Auditioning a voice is a
+deliberate, supported path *during* a read: `MainActivity.previewVoice()` records the
+reading position first, and its own comment says so — "auditioning a voice stops the
+read". It dispatches `ACTION_PREVIEW`, which the service handles in a separate branch.
+That branch never touches `reading`, so:
+
+| step | `reading` | what the service believes |
+|---|---|---|
+| user reads a passage | `true` | a read is in progress |
+| user auditions a voice → sample supersedes the read | `true` | a read is still in progress — **false** |
+| the sample fails | `true` | "the read failed" |
+| service stops; outcome stored | — | **passage recorded FAILED**, with the sample's message |
+
+The user's passage was interrupted by their own action; it did not fail. The stored
+outcome then survives the service, and `ReadOutcomePolicy.adopt` presents it on the
+next bind, because the passage matches. So the claim outlives the session: a passage
+the user only *interrupted* is reported as having failed.
+
+The completion path was already correct — it tests `tts.isPreviewing` — but the error
+path tests nothing, and `TtsEngine.preview` clears `isPreviewing` **before** it invokes
+`onError`, so the engine's flag cannot be consulted there even in principle.
+
+### 12.2 The change
+
+One fact replaces the boolean: `InFlightUtterance { NONE, READ, PREVIEW }`, set on
+dispatch by each of the three dispatch sites and cleared when an utterance ends.
+`UtteranceAttributionPolicy` turns "what is in flight" plus "which terminal event" into
+`TerminalRecord { COMPLETION, FAILURE, NONE }`, and only `READ` produces a record.
+
+```
+terminal event   in flight = READ          in flight = PREVIEW / NONE
+───────────────  ────────────────────────  ───────────────────────────────
+completion       record COMPLETED           record nothing (sample / unattributable)
+terminal error   record FAILED              record nothing
+```
+
+Both terminal paths now ask the policy, so the rule lives in one place instead of
+being re-derived at each site — which is how the two sites came to disagree.
+
+`NONE` recording nothing is not a formality: an outcome arriving with nothing in
+flight is unattributable, and an unattributable outcome is worse than none.
+
+### 12.3 Evidence (run in this sandbox)
+
+The JDK 17 / kotlinc 1.9.22 toolchain and the nine classpath jars were provisioned in
+this sandbox, so the tracked harness ran here rather than only in Actions.
+
+| Check | Command | Result |
+|---|---|---|
+| Baseline reproduced at `b9bbf84`, clean tree | `./ci/run-ci.sh --check` | `total_tests=481`, job1/job2 exit 0 — matches §11 |
+| With this change | `./ci/run-ci.sh --check` | `total_tests=490`, job1/job2 exit 0 |
+| `UtteranceAttributionTest` | job 1 (compiled in scope: pure JVM) | 7 tests, pass |
+| `UtteranceAttributionWiringTest` | job 2 | 2 tests, pass |
+| **Negative control A** — pre-repair `SpeechService.kt` restored from `HEAD`, everything else unchanged | `./ci/run-ci.sh --check` | `job 2: exit=1`; `There were 2 failures`, and the guard reported all five defects: *a dispatched passage is not recorded as the read in flight · a dispatched sample is not recorded as the sample in flight · completion is not decided by UtteranceAttributionPolicy.onComplete · a terminal error is not decided by UtteranceAttributionPolicy.onTerminalError · the service still holds a bare 'reading' flag* |
+| **Negative control B** — in-suite, on the real file | `UtteranceAttributionWiringTest.the wiring guard detects the pre-repair service` | rewrites the live source back to the pre-repair shapes and asserts the same five defects, in order |
+| Fix restored, byte-identical (`cmp -s`) | `./ci/run-ci.sh --check` | `total_tests=490`, job1/job2 exit 0 |
+
+481 → 490 = **+9**, which is exactly the 7 new `UtteranceAttributionTest` methods plus
+the 2 wiring nodes — no existing test changed outcome.
+
+Control A is the one that matters: it is a *live* control on the real file, not a
+fixture. It fails with the five-defect message above, which names the passage/sample
+attribution explicitly, so neither predicate is vacuous.
+
+### 12.4 Not claimed
+
+- **Not device-validated.** `SpeechService.kt` is `OUT` of the JVM scope
+  (`ci/scope.py`), so the wiring is proven by compilation in the APK/emulator jobs and
+  by the source guard, not by execution on a device. No physical-device behaviour is
+  claimed for this change.
+- **The transient screen is unchanged.** `Client.onError` still delivers a sample's
+  failure to the bound screen, which sets `readFailure` and can paint
+  `PlaybackPhase.FAILED` while the sample is what failed. This change fixes the
+  *stored* claim (which outlives the session); the *live* line during a failed sample
+  is the next bounded task, and is recorded in `SONATA_KNOWN_LIMITATIONS.md` L24 rather
+  than half-repaired here.
+- **No engine, transport, model or playback change.** `TtsEngine.isPreviewing` is no
+  longer read by the service; the property is left in place because the engine still
+  uses it internally.
