@@ -1,6 +1,8 @@
 package com.arkadia.sonata
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
@@ -124,5 +126,65 @@ class PlaybackPhaseTest {
         // then the engine refuses. The refusal is the truth.
         val phase = PlaybackPhasePolicy.decide(observe(preparing = true, failure = "No voice"))
         assertEquals(PlaybackPhase.FAILED, phase)
+    }
+
+    // ── The ticker, and the deadline the wait needs ───────────────────────────
+    //
+    // A phase that nothing repaints is only half a fix: the screen could say
+    // "Preparing…" and still have no way to notice the wait ending. These tests
+    // pin the two facts the screen needs from the policy, not the painting.
+
+    @Test
+    fun `a preparation keeps the ticker running`() {
+        val phase = PlaybackPhasePolicy.decide(observe(preparing = true))
+        assertEquals(PlaybackPhase.PREPARING, phase)
+        assertTrue(PlaybackPhasePolicy.keepsTicking(phase))
+    }
+
+    @Test
+    fun `negative control - the engine's own live state would end the ticker`() {
+        // The rule the ticker used before this change, kept verbatim: it asks the
+        // engine, and during preparation the engine is neither playing nor paused.
+        fun engineOnlyRule(playing: Boolean, paused: Boolean) = playing || paused
+
+        assertFalse(
+            "the pre-repair rule stops ticking exactly when the wait begins",
+            engineOnlyRule(playing = false, paused = false),
+        )
+        assertTrue(
+            "the policy must not agree with it",
+            PlaybackPhasePolicy.keepsTicking(PlaybackPhase.PREPARING),
+        )
+    }
+
+    @Test
+    fun `live and paused phases keep the ticker, settled ones do not`() {
+        assertTrue(PlaybackPhasePolicy.keepsTicking(PlaybackPhase.PLAYING))
+        assertTrue(PlaybackPhasePolicy.keepsTicking(PlaybackPhase.BUFFERING))
+        assertTrue(PlaybackPhasePolicy.keepsTicking(PlaybackPhase.PAUSED))
+        assertFalse(PlaybackPhasePolicy.keepsTicking(PlaybackPhase.READY))
+        assertFalse(PlaybackPhasePolicy.keepsTicking(PlaybackPhase.STARTING))
+        assertFalse(PlaybackPhasePolicy.keepsTicking(PlaybackPhase.COMPLETED))
+        assertFalse(PlaybackPhasePolicy.keepsTicking(PlaybackPhase.FAILED))
+    }
+
+    @Test
+    fun `a preparation is not expired one millisecond before the deadline`() {
+        assertFalse(
+            PlaybackPhasePolicy.preparationExpired(PlaybackPhasePolicy.PREPARE_TIMEOUT_MS - 1),
+        )
+    }
+
+    @Test
+    fun `a preparation is expired at the deadline, so the screen stops claiming it`() {
+        assertTrue(
+            PlaybackPhasePolicy.preparationExpired(PlaybackPhasePolicy.PREPARE_TIMEOUT_MS),
+        )
+        // Expiring is recorded as a failure with a reason, never as a silent reset
+        // to "Ready": a read nobody heard must not look like one never asked for.
+        val afterExpiry = PlaybackPhasePolicy.decide(
+            observe(preparing = false, failure = "The voice did not start"),
+        )
+        assertEquals(PlaybackPhase.FAILED, afterExpiry)
     }
 }

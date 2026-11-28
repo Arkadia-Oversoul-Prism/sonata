@@ -82,4 +82,44 @@ object PlaybackPhasePolicy {
         o.bound -> PlaybackPhase.READY
         else -> PlaybackPhase.STARTING
     }
+
+    /**
+     * How long a dispatched read may wait for its first sample before the screen
+     * stops claiming one is coming.
+     *
+     * The online transport's read timeout exists to cover synthesis of a whole
+     * passage, so the wait is real and is not a fault — but it is not unbounded
+     * either. A service that never calls back must not leave "Preparing…" on
+     * screen for ever, because a screen that says it is still working cannot be
+     * distinguished from one that is stuck.
+     */
+    const val PREPARE_TIMEOUT_MS = 20_000L
+
+    /**
+     * Whether the progress ticker must keep running in [phase].
+     *
+     * [PlaybackPhase.PREPARING] is included, and that is the whole point: the
+     * ticker is the only thing repainting the screen between the dispatch and the
+     * engine's first callback. Gating it on `playing || paused` — the engine's own
+     * live state — stopped it on its first pass during preparation, so the screen
+     * had no way to notice either that the read had started or that it had waited
+     * too long.
+     */
+    fun keepsTicking(phase: PlaybackPhase): Boolean = when (phase) {
+        PlaybackPhase.BUFFERING,
+        PlaybackPhase.PLAYING,
+        PlaybackPhase.PAUSED,
+        PlaybackPhase.PREPARING,
+        -> true
+
+        PlaybackPhase.STARTING,
+        PlaybackPhase.READY,
+        PlaybackPhase.COMPLETED,
+        PlaybackPhase.FAILED,
+        -> false
+    }
+
+    /** True once a preparation has waited [timeoutMs], measured from the dispatch. */
+    fun preparationExpired(waitedMs: Long, timeoutMs: Long = PREPARE_TIMEOUT_MS): Boolean =
+        waitedMs >= timeoutMs
 }

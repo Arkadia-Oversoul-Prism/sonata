@@ -850,3 +850,59 @@ wholesale, and the numbers above are the record.
   preview, so a sample that cannot be synthesised cannot claim the passage failed.
 - **No engine, model, or neural-tier change.** `EngineFactory` still has no caller on
   this branch — that is #10's slice.
+
+---
+
+## 11. S1 — the preparing phase now keeps itself alive, and expires (append-only)
+
+**Date:** 2026-11-28
+**Base:** `3e034cae047366a72d3fd0d201036db2a111acc3` (branch `fix/s1-tier-truth-001`, PR #9)
+**Continued, not duplicated:** an attempt to open a separate PR for this was abandoned
+after `git merge` of this branch showed it already carried `PlaybackPhase.PREPARING`.
+
+### 11.1 What §9 and §10 left open
+
+§9 gave the screen a `PREPARING` phase, so the line stops reverting to "Ready". Two
+things still did not follow from it:
+
+1. **Nothing repainted.** The ticker's continue test was still the engine's own
+   `isPlaying || isPaused`. During preparation the engine is neither, so the ticker
+   ran exactly one pass, painted the phase, and stopped. The screen could say
+   "Preparing…" and had no way to notice it ending — or not ending.
+2. **The wait had no deadline.** `readPreparing` is a fact the *screen* holds; the
+   engine will never correct it. A service that dies or never calls back left
+   "Preparing…" on screen for ever, which is indistinguishable from a stuck screen
+   and is a false claim that work is still in progress.
+
+### 11.2 The change
+
+`PlaybackPhasePolicy` gains the two facts the screen needs, both pure and both
+tested here:
+
+- `keepsTicking(phase)` — true for BUFFERING / PLAYING / PAUSED / **PREPARING**.
+- `PREPARE_TIMEOUT_MS` (20 s) and `preparationExpired(waitedMs)`.
+
+`MainActivity` records the dispatch instant, settles an over-long wait before each
+paint and on `onResume`, and uses one `surfacePhase()` for both the painter and the
+ticker. An expired wait is recorded as **FAILED** with a reason — the existing phase
+— never as a silent reset to "Ready": a read nobody heard must not look like one
+that was never asked for.
+
+### 11.3 Evidence (run in this sandbox)
+
+| Check | Command | Result |
+|---|---|---|
+| This branch at `3e034ca`, clean tree | `./ci/run-ci.sh --check` | `total_tests=476`, job1/job2 exit 0 |
+| With this change | `./ci/run-ci.sh --check` | `total_tests=481`, job1/job2 exit 0 |
+| `PlaybackPhaseTest` alone | `JUnitCore …PlaybackPhaseTest` | `OK (19 tests)` |
+| **Negative control** — `PREPARING` moved to the `false` arm of `keepsTicking` | `JUnitCore …PlaybackPhaseTest` | `Tests run: 19, Failures: 2` — `a preparation keeps the ticker running` and its control |
+| Fix restored, byte-identical (`cmp -s`) | — | restored |
+
+476 → 481 = +5, exactly the new `PlaybackPhaseTest` methods.
+
+### 11.4 Not claimed
+
+- **Not device-validated.** `MainActivity` is outside the JVM scope (`ci/scope.py`),
+  so the wiring is proven by compilation in the APK/emulator CI jobs, not here.
+- **No engine, model, transport or playback change.** The wait is presented and
+  bounded; how long synthesis actually takes is unchanged and unmeasured here.

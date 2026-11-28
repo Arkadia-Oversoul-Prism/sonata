@@ -69,6 +69,15 @@ class MainActivity : AppCompatActivity() {
     private var readCompleted = false
     private var readFailure: String? = null
 
+    /**
+     * When the wait recorded by [readPreparing] began.
+     *
+     * Read only while [readPreparing] is true, so the sites that clear the flag do
+     * not have to clear this too — a stale instant cannot produce a phase, because
+     * [PlaybackPhasePolicy.decide] consults `preparing` first.
+     */
+    private var preparingSince = 0L
+
     private val conn = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName, binder: IBinder) {
             speechService = (binder as SpeechService.LocalBinder).getService()
@@ -529,6 +538,7 @@ class MainActivity : AppCompatActivity() {
         // audio starts the screen is neither playing nor paused. Recorded here so
         // render() can say so instead of showing a stale line.
         readPreparing = true
+        preparingSince = SystemClock.elapsedRealtime()
         readCompleted = false
         readFailure = null
         render()
@@ -607,8 +617,11 @@ class MainActivity : AppCompatActivity() {
             overlayDeniedNoticeShown = false
             showNotice("Floating player enabled — tap Float to use it")
         }
+        // A wait that elapsed while the screen was away has no tick to be noticed
+        // on, so it is settled here before the first paint.
+        settlePreparation()
         render()
-        if (speechService?.isPlaying == true || speechService?.isPaused == true) startTicker()
+        if (PlaybackPhasePolicy.keepsTicking(surfacePhase())) startTicker()
     }
 
     override fun onStop() {
@@ -648,11 +661,43 @@ class MainActivity : AppCompatActivity() {
     // ── Rendering ─────────────────────────────────────────────────────────────
 
     /**
-     * Poll the engine's real progress while a read is playing.
+     * Retire a wait that has gone on too long.
      *
-     * The engine exposes characters spoken, not a percentage, because a segmented
-     * read has no single audio file to ask for a duration. The ticker is what turns
-     * that into a bar and a position, and it stops the moment nothing is playing.
+     * A preparation is a fact the screen holds, not one the engine reports, so
+     * nothing outside this class will ever correct it. Left alone it outlives the
+     * service it described, and "Preparing…" becomes indistinguishable from a
+     * screen that is simply stuck. Past the deadline the read is recorded as
+     * failed with the reason, which is the one claim the evidence supports.
+     */
+    private fun settlePreparation() {
+        if (!readPreparing) return
+        val waited = SystemClock.elapsedRealtime() - preparingSince
+        if (!PlaybackPhasePolicy.preparationExpired(waited)) return
+        readPreparing = false
+        readCompleted = false
+        readFailure = STALLED_VOICE_MESSAGE
+    }
+
+    /** The screen's phase, from the engine's live state and the read's own facts. */
+    private fun surfacePhase(): PlaybackPhase = PlaybackPhasePolicy.decide(
+        PlaybackObservation(
+            bound = bound,
+            playing = speechService?.isPlaying == true,
+            paused = speechService?.isPaused == true,
+            bufferingNext = speechService?.isBufferingNext == true,
+            preparing = readPreparing,
+            completed = readCompleted,
+            failure = readFailure,
+        ),
+    )
+
+    /**
+     * Repaint while the surface still has something to report.
+     *
+     * The continue test is the phase policy, not the engine's own
+     * `isPlaying || isPaused`: during preparation the engine is neither, so that
+     * test stopped the ticker on its first pass and nothing was left to notice the
+     * read starting — or the wait expiring.
      */
     private fun startTicker() {
         if (tickerRunning) return
@@ -660,8 +705,9 @@ class MainActivity : AppCompatActivity() {
         ticker.post(object : Runnable {
             override fun run() {
                 if (!tickerRunning) return
+                settlePreparation()
                 render()
-                if (speechService?.isPlaying == true || speechService?.isPaused == true) {
+                if (PlaybackPhasePolicy.keepsTicking(surfacePhase())) {
                     // Checkpoint the position at a human pace, not on every frame. A
                     // SharedPreferences write allocates and schedules a disk write,
                     // and 2.5 of those a second is pure waste — the position only
@@ -705,17 +751,7 @@ class MainActivity : AppCompatActivity() {
         // One decision, then one rendering of it. The two lines used to be decided
         // independently, so a read that had ended showed "Ready / Paste text…" —
         // the same screen as one that never started.
-        val phase = PlaybackPhasePolicy.decide(
-            PlaybackObservation(
-                bound = bound,
-                playing = playing,
-                paused = paused,
-                bufferingNext = svc?.isBufferingNext == true,
-                preparing = readPreparing,
-                completed = readCompleted,
-                failure = readFailure,
-            ),
-        )
+        val phase = surfacePhase()
 
         binding.tvState.text = when (phase) {
             PlaybackPhase.BUFFERING -> getString(R.string.state_buffering)
@@ -884,6 +920,15 @@ class MainActivity : AppCompatActivity() {
 
     private companion object {
         const val TAG = "SonataMain"
+
+        /**
+         * What the screen says when a dispatched read never produced a sample.
+         *
+         * Rendered as the FAILED substate, which is the phase the deadline puts the
+         * read in. It is a claim about what the screen saw, not a diagnosis: the
+         * engine may be slow, unavailable, or gone.
+         */
+        const val STALLED_VOICE_MESSAGE = "The voice did not start — tap Read aloud to try again"
 
         /** Used only for the "about N minutes" estimate on the count line. */
         const val WORDS_PER_MINUTE = 150
