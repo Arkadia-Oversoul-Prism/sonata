@@ -1003,3 +1003,93 @@ attribution explicitly, so neither predicate is vacuous.
 - **No engine, transport, model or playback change.** `TtsEngine.isPreviewing` is no
   longer read by the service; the property is left in place because the engine still
   uses it internally.
+
+## 13. S1 — a terminal event reaches the line it belongs to (append-only)
+
+**Date:** 2026-11-28
+**Base:** `f488815df765c67ea27587b92bd53786b323a544` (branch `fix/s1-tier-truth-001`, PR #9)
+**Continued, not duplicated:** L24 in `SONATA_KNOWN_LIMITATIONS.md` names this as the
+next bounded change, and §12 records the surface it left unrepaired.
+
+### 13.1 The defect
+
+§12 repaired the **stored** outcome: a sample's terminal event is no longer recorded as
+the passage's. The **live** line was untouched, and it had two halves.
+
+```kotlin
+// the service, before this change — every terminal event, every client
+clients.forEach { it.onError(msg) }
+clients.forEach { it.onComplete() }
+```
+
+| what the user did | what was in flight | what the screen said |
+|---|---|---|
+| read a passage, auditioned a voice, the sample failed | `PREVIEW` | **"the read stopped"** (`readFailure` set → `FAILED`) |
+| read a passage, auditioned a voice, the sample succeeded | `PREVIEW` | **the read finished** (`readCompleted = true`) — or, after section 12's early return, "playing the sample" for ever |
+| pressed Read on an empty passage | `READ` | "Nothing to read" (correct) |
+
+Both rows are claims the application did not observe. The passage was interrupted by
+the user, so it neither failed nor finished.
+
+The stored outcome and the live line are two surfaces of one question — *what is this
+event about?* — and §12 answered it for one surface only.
+
+### 13.2 The change
+
+```kotlin
+// UtteranceAttribution.kt
+fun liveSurface(inFlight: InFlightUtterance): LiveSurface =
+    if (inFlight == InFlightUtterance.PREVIEW) LiveSurface.PREVIEW
+    else LiveSurface.READ
+```
+
+```
+                          before                              after
+──────────────────────────────────────────  ─────────────────────────────────────────────
+delivery                  two call sites, each   one notifyTerminal(surface, message),
+                          delivering to every     surface from the policy
+                          client unconditionally
+surface decided           — nowhere              before `inFlight` is cleared; an event
+                                                  whose fact was erased first is
+                                                  unattributable and reads as the read's
+sample ends               onError / onComplete   Client.onPreviewEnd(message?)
+                                                  MainActivity: notice + repaint from the
+                                                  read's own facts
+                                                  FloatingOverlayService: no stopSelf —
+                                                  the window represents the passage
+NONE                      onError               onError (unchanged, deliberately)
+```
+
+Why `NONE` stays on the read's line: an unattributable event is not the same as an
+undeliverable one. `"Nothing to read"` is dispatched with nothing in flight, and
+withholding it would trade a wrong message for a missing one.
+
+### 13.3 Verification
+
+The tracked harness ran in this environment (`JDK 17` + `kotlinc 1.9.22`, both
+provisioned here; the preflight caught two platform jars that Maven Central does not
+serve and reported `TOOLCHAIN_BROKEN` rather than a code failure).
+
+| Check | Result |
+|---|---|
+| `./ci/run-ci.sh --check` at base `f488815` | `total_tests=490`, job1_exit=0, job2_exit=0 — reproduces §12's recorded figure |
+| With this change | `total_tests=498`, job1_exit=0, job2_exit=0 — **+8** = 4 policy methods (`UtteranceAttributionTest`) + 4 guards (`LiveLineAttributionWiringTest`) |
+| **Negative control (live)** — `SpeechService.kt` restored to `clients.forEach { it.onError(msg) }`, everything else unchanged | `Tests run: 180, Failures: 1` — `LiveLineAttributionWiringTest.the service delivers a terminal event to the surface the policy names` |
+| **Negative control (live)** — `readFailure = message` put back into `MainActivity.onPreviewEnd` | `Tests run: 180, Failures: 2` — the implementer guard and its own in-suite control |
+| Each fix restored, byte-identical (`cmp -s`) | `OK (180 tests)` |
+
+One test failed on first run and was **corrected, not weakened**: `the sample's line is
+used exactly when the read's record is refused` asserted the agreement over
+`InFlightUtterance.values()`, which is false for `NONE` by design (§13.2). The property
+now states its domain.
+
+### 13.4 Not claimed
+
+- **Not device-validated.** `MainActivity` and `FloatingOverlayService` are outside the
+  JVM scope, so the wiring is proven by source guards plus compilation in the APK and
+  emulator jobs. No screen behaviour on a physical device is claimed.
+- **No engine, model, transport or playback change.** This changes who is told, not
+  what is spoken.
+- **The repainted line is `Ready`, not `Paused`,** after a sample ends. The position is
+  kept (`previewVoice()` calls `rememberProgress()` first), so the read is resumable;
+  which phase *presents* that is a separate decision, recorded in L24.

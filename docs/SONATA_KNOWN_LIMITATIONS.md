@@ -257,9 +257,10 @@ device observation. What is verified is the adoption rule (10 JVM tests), the re
 round trip through `Prefs`, and the wiring (3 source guards with two negative
 controls). See `SONATA_IMPLEMENTATION_LEDGER.md` §10.
 
-### L24 — a failed voice sample still paints the read's line as failed, live
+### L24 — a failed voice sample still paints the read's line as failed, live **REPAIRED**
 
-**Added 2026-11-28 (PR #9, stage S1e).**
+**Added 2026-11-28 (PR #9, stage S1e). Repaired the same day by stage S1f, in the same
+branch — the original text is kept below and the repair follows it.**
 
 Auditioning a voice supersedes the read, so the sample and the passage share one
 listener. §12 of the ledger repaired the **stored** outcome: a sample's failure is no
@@ -279,3 +280,28 @@ is persisted from it, and the passage is not offered as resumable-failed afterwa
 fact passed to clients), so the screen can say "the sample could not be played" without
 inventing a read failure. That changes the `SpeechService.Client` contract, which both
 `MainActivity` and `FloatingOverlayService` implement, so it is its own bounded change.
+
+**Repaired 2026-11-28 (stage S1f).** The callback was added, and the contract change
+turned out to be the smaller half of the repair, because the live line had a second
+defect the same fix closes: a sample that *succeeded* was also delivered as
+`onComplete`, so auditioning a voice marked the read as finished.
+
+- `UtteranceAttributionPolicy.liveSurface(inFlight)` answers the live-line question from
+  the same in-flight fact the stored record uses, so the two surfaces cannot disagree.
+- `SpeechService` decides the surface **before** clearing `inFlight`, and delivers
+  through one `notifyTerminal(surface, message)`. A sample's end — success or failure —
+  now reaches `Client.onPreviewEnd`, which both implementers carry:
+  `MainActivity` shows the reason as a notice and repaints the read from its own facts;
+  `FloatingOverlayService` does not dismiss the window, because the window represents
+  the passage.
+- `InFlightUtterance.NONE` maps to the read's line on purpose: "Nothing to read" is
+  dispatched that way, and a message delivered nowhere is not an improvement on a
+  message on the wrong line.
+
+**What is still not claimed.** That the repaired line *renders* is a device
+observation. `MainActivity` and `FloatingOverlayService` are outside the JVM scope
+(`ci/scope.py`), so what is verified here is the policy (4 JVM tests), the wiring (4
+source guards), and compilation in the APK/emulator jobs. After a sample the screen
+repaints to the read's own state — typically `Ready` with the position kept, not
+`Paused`; choosing otherwise is a presentation decision this repair does not make.
+See `SONATA_IMPLEMENTATION_LEDGER.md` §13.

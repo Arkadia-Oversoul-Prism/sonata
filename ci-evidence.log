@@ -1,10 +1,10 @@
 === CI EVIDENCE ===
-commit_sha=7c4e6a64e39e34685b06e2e1698cf9eb896b9720
-short_sha=7c4e6a6
-tree_sha=d16e7ead601732eacc1090d9df6d5a8071e59b11
+commit_sha=f488815df765c67ea27587b92bd53786b323a544
+short_sha=f488815
+tree_sha=6b8b084bb748a15f8129b3474cca304d1781758b
 branch=fix/s1-tier-truth-001
-dirty_files=12
-date_utc=2026-11-27T02:03:51Z
+dirty_files=9
+date_utc=2026-11-28T15:15:50Z
 harness=ci/run-ci.sh (tracked in this tree)
 android_sdk=ABSENT - Gradle build, lint and device tests NOT RUN
 
@@ -14,8 +14,8 @@ openjdk version "17.0.21.1" 2026-11-17
 
 === JOB 1: app core ===
 === SCOPE ===
-jvm_main_sources=50
-jvm_test_sources=21
+jvm_main_sources=53
+jvm_test_sources=24
 excluded_sources=26
   EXCLUDED app/src/main/kotlin/com/arkadia/sonata/AndroidAudioPlayer.kt
   EXCLUDED app/src/main/kotlin/com/arkadia/sonata/AndroidOfflineVoice.kt
@@ -48,15 +48,18 @@ excluded_sources=26
 COMPILE_EXIT=0
 
 === TEST ===
-test_classes=21
+test_classes=24
   CLASS com.arkadia.sonata.BackendConfigTest
   CLASS com.arkadia.sonata.NotificationTextTest
+  CLASS com.arkadia.sonata.PlaybackPhaseTest
   CLASS com.arkadia.sonata.PlaybackStateTest
+  CLASS com.arkadia.sonata.ReadOutcomeTest
   CLASS com.arkadia.sonata.ResumePointTest
   CLASS com.arkadia.sonata.SpeechChunkerTest
   CLASS com.arkadia.sonata.SpeedStepsTest
   CLASS com.arkadia.sonata.SynthesisTierPolicyTest
   CLASS com.arkadia.sonata.TextLimitsTest
+  CLASS com.arkadia.sonata.UtteranceAttributionTest
   CLASS com.arkadia.sonata.VoiceOfferingTest
   CLASS com.arkadia.sonata.data.LibraryRulesTest
   CLASS com.arkadia.sonata.offline.EngineTest
@@ -71,8 +74,8 @@ test_classes=21
   CLASS com.arkadia.sonata.offline.VoiceStudioTest
   CLASS com.arkadia.sonata.offline.WavReaderTest
 JUnit version 4.13.2
-Time: 0.279
-OK (278 tests)
+Time: 0.312
+OK (318 tests)
 
 TEST_EXIT=0
 RESULT=PASS
@@ -80,18 +83,18 @@ APP_CORE_EXIT=0
 
 === JOB 2: narration core ===
 narration_core_main_sources=15
-narration_core_test_sources=6
+narration_core_test_sources=10
 COMPILE_EXIT=0
-test_classes=6
+test_classes=10
 JUnit version 4.13.2
-................................................................connectivityProbe: live=true elapsedMs=19
-.........................................................................................................
-Time: 0.693
+................................................................connectivityProbe: live=true elapsedMs=21
+....................................................................................................................
+Time: 0.689
 
-OK (169 tests)
+OK (180 tests)
 
 
 NARRATION_EXIT=0
 
-SUMMARY total_tests=447 job1_exit=0 job2_exit=0
+SUMMARY total_tests=498 job1_exit=0 job2_exit=0
 VERDICT=PASS

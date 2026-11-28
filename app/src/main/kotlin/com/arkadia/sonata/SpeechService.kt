@@ -94,6 +94,13 @@ class SpeechService : Service() {
         fun onError(msg: String) {}
         /** A voice sample started, so the screen can show it is auditioning. */
         fun onPreviewStart(voiceId: String) {}
+
+        /**
+         * The auditioning sample ended; [message] is why it failed, or null if it
+         * finished. Separate from [onComplete] and [onError] because a sample
+         * supersedes the read: its end is not the passage's end.
+         */
+        fun onPreviewEnd(message: String? = null) {}
     }
 
     fun addClient(client: Client) {
@@ -102,6 +109,23 @@ class SpeechService : Service() {
 
     fun removeClient(client: Client) {
         clients -= client
+    }
+
+    /**
+     * Deliver a terminal event to the line it belongs to.
+     *
+     * [surface] is decided by the caller *before* [inFlight] is cleared: clearing it
+     * first would make every event look unattributable, and a sample's end would be
+     * delivered as the passage's.
+     */
+    private fun notifyTerminal(surface: LiveSurface, message: String?) {
+        clients.forEach {
+            when {
+                surface == LiveSurface.PREVIEW -> it.onPreviewEnd(message)
+                message == null -> it.onComplete()
+                else -> it.onError(message)
+            }
+        }
     }
 
     /** User-presentable message for the most recent failure, if any. */
@@ -167,8 +191,11 @@ class SpeechService : Service() {
             // foreground for work that will not happen.
             SpeechCommand.None -> {
                 if (intent?.action == ACTION_SPEAK) {
+                    // A read was asked for and there is nothing speakable to read, so
+                    // this is the read's failure whatever was in flight before it.
+                    inFlight = InFlightUtterance.READ
                     lastError = "Nothing to read"
-                    clients.forEach { it.onError(lastError!!) }
+                    notifyTerminal(UtteranceAttributionPolicy.liveSurface(inFlight), lastError!!)
                 }
                 stopSelf(startId)
             }
@@ -280,13 +307,19 @@ class SpeechService : Service() {
             currentEngine = null
             lastError = null
             stopNotifTicker()
+            // Decided before `inFlight` is cleared: an event whose in-flight fact has
+            // already been erased is unattributable, and a sample's end would reach
+            // the read's line.
+            val surface = UtteranceAttributionPolicy.liveSurface(inFlight)
 
             // A finished preview is not a finished read. Reporting it as one would
             // tell the main screen the passage had been read, which it has not, and
-            // the sample is not the passage.
+            // the sample is not the passage. The sample's own line is still told it
+            // ended, or the screen keeps claiming it is auditioning for ever.
             if (inFlight == InFlightUtterance.PREVIEW) {
                 previewVoiceId = null
                 inFlight = InFlightUtterance.NONE
+                notifyTerminal(surface, message = null)
                 stopForeground(STOP_FOREGROUND_REMOVE)
                 stopSelf()
                 return
@@ -308,7 +341,7 @@ class SpeechService : Service() {
             // Notified before stopSelf(): the service is gone by the time the last
             // client runs, and a client that only learns of completion from a
             // destroyed service can never dismiss itself.
-            clients.forEach { it.onComplete() }
+            notifyTerminal(surface, message = null)
             stopSelf()
         }
 
@@ -320,7 +353,10 @@ class SpeechService : Service() {
                 currentEngine = it
                 fellBackOffline = true
             }
-            clients.forEach { it.onError(msg) }
+            // Decided before `inFlight` is cleared, for the same reason as onComplete:
+            // a sample's failure must reach the sample's line, not the read's.
+            val surface = UtteranceAttributionPolicy.liveSurface(inFlight)
+            notifyTerminal(surface, msg)
             if (fellBackTo == null) {
                 // A terminal failure of a read. Recorded for the same reason as a
                 // completion: the screen may not be bound, and the service is about

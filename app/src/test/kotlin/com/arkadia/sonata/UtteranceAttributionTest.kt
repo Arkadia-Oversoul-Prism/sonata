@@ -90,4 +90,58 @@ class UtteranceAttributionTest {
             assertEquals(expected, UtteranceAttributionPolicy.onTerminalError(inFlight) == TerminalRecord.NONE)
         }
     }
+
+    /**
+     * The live line is the second surface of the same question.
+     *
+     * Correcting only the stored outcome left the visible one wrong: a sample's
+     * failure was still delivered to the read's line, which painted "the read
+     * stopped" for a passage the user had merely interrupted.
+     */
+    @Test
+    fun `a sample's terminal event belongs to the sample's line`() {
+        assertEquals(
+            LiveSurface.PREVIEW,
+            UtteranceAttributionPolicy.liveSurface(InFlightUtterance.PREVIEW),
+        )
+    }
+
+    @Test
+    fun `a read's terminal event belongs to the read's line`() {
+        assertEquals(
+            LiveSurface.READ,
+            UtteranceAttributionPolicy.liveSurface(InFlightUtterance.READ),
+        )
+    }
+
+    /**
+     * Nothing in flight is unattributable — but "unattributable" must not mean
+     * "delivered nowhere". "Nothing to read" arrives that way, and a missing message
+     * is not an improvement on a wrong one.
+     */
+    @Test
+    fun `an unattributable event reaches the read's line rather than no line`() {
+        assertEquals(
+            LiveSurface.READ,
+            UtteranceAttributionPolicy.liveSurface(InFlightUtterance.NONE),
+        )
+    }
+
+    /**
+     * For an attributable event the two surfaces agree: the line is the sample's
+     * exactly when the record it would produce is refused.
+     *
+     * [InFlightUtterance.NONE] is excluded on purpose. It records nothing *and*
+     * reaches the read's line, because a message with no line is worse than a message
+     * on the line the user asked from — the two questions are related, not identical.
+     */
+    @Test
+    fun `the sample's line is used exactly when the read's record is refused`() {
+        for (inFlight in listOf(InFlightUtterance.READ, InFlightUtterance.PREVIEW)) {
+            assertEquals(
+                UtteranceAttributionPolicy.onTerminalError(inFlight) == TerminalRecord.NONE,
+                UtteranceAttributionPolicy.liveSurface(inFlight) == LiveSurface.PREVIEW,
+            )
+        }
+    }
 }

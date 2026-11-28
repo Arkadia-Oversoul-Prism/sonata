@@ -146,6 +146,20 @@ class MainActivity : AppCompatActivity() {
             showNotice(msg)
             render()
         }
+
+        /**
+         * The auditioning sample ended; [message] is why it failed, or null.
+         *
+         * The sample is not the passage. Painting the read's terminal phases from it
+         * would claim "the read stopped" for a passage the user merely interrupted to
+         * hear a voice, so the reason is shown as a notice and the read's own state is
+         * repainted from its own facts.
+         */
+        override fun onPreviewEnd(message: String?) {
+            if (message != null) showNotice(message)
+            render()
+            if (PlaybackPhasePolicy.keepsTicking(surfacePhase())) startTicker()
+        }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
