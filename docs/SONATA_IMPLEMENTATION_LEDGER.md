@@ -484,3 +484,134 @@ The 418 - 405 = 13 delta is exactly the new `TextNormalizerCaseTest` nodes
   without addressing the heading defect.
 - No engine, model, playback, or UI change. `EngineFactory` is still not called
   from the UI, which remains the next slice.
+
+---
+
+## 9. S3 — a shared text file now reaches the reader (append-only)
+
+**Date:** 2026-11-28
+**Base:** `7c4e6a64e39e34685b06e2e1698cf9eb896b9720` (`feature/sonata-tts-app`)
+**Branch:** `feat/s3-document-file-import-01`
+**Phase:** S3, first step — "Import -> Open -> Read"
+
+> **Section numbering.** Sections 9 and 10 are being appended concurrently by
+> three open PRs (#10, #11, and this one), each writing from the same §8 base.
+> They collide on this file by construction; the numbering is resolved when the
+> owner merges them. See §9.7.
+
+### 9.1 The defect
+
+The app had two ways in, both of them *text*: `PROCESS_TEXT` (the selection menu)
+and `SEND` with `EXTRA_TEXT` (the share sheet's plain-text body). A user who
+shares a `.txt` or `.md` **file** sends `EXTRA_STREAM` and no text at all, and
+that arrived nowhere: `ProcessTextActivity` looked for a text extra, found none,
+and answered **"No text selected"**.
+
+Two independent causes, either of which alone was enough:
+
+1. `ProcessTextActivity.forward()` never looked at `EXTRA_STREAM`.
+2. The `SEND` intent filter was declared for `text/plain` only. A file shared
+   from a file manager carries its own media type — `text/markdown` for a `.md`,
+   and a vendor type for some `.txt` providers — so at `text/plain` Sonata was
+   not offered as a share target for the file at all.
+
+Cause 2 is why the S3 import step *appeared* not to exist rather than appearing
+broken: there was nothing to tap.
+
+### 9.2 What was built
+
+| File | Role |
+|---|---|
+| `imports/DocumentImport.kt` (new) | Every decision: byte ceiling, binary refusal, strict UTF-8 with a Latin-1 fallback, BOM strip, title derivation |
+| `imports/DocumentImportTest.kt` (new) | 19 JVM tests, one per decision, including the refusal cases |
+| `ProcessTextActivity.kt` | Reads `EXTRA_STREAM` (and clip data, which some senders use instead), opens the stream, reports the outcome |
+| `AndroidManifest.xml` | `SEND` filter widened to `text/*`; `PROCESS_TEXT` deliberately left at `text/plain` |
+| `ProcessTextHandoffTest.kt` | 3 wiring assertions: the filter admits a file, the selection menu was not widened with it, the handoff reads the stream under a ceiling |
+
+`MainActivity` is **not touched**. The imported text is forwarded as
+`EXTRA_PROCESS_TEXT`, which `consumeIncomingText` already reads, so the file
+lands in the same input a selection lands in and the read starts there.
+
+### 9.3 Two decisions worth recording
+
+**Strict decoding, not substitution.** `String(bytes, UTF_8)` replaces malformed
+input with U+FFFD, which turns a decoding failure into text the user never wrote.
+The importer decodes with `CodingErrorAction.REPORT` and, on failure, interprets
+the bytes as ISO-8859-1 — a mapping that cannot fail — and *reports which
+interpretation it used*. A Windows-era `.txt` therefore reads as itself instead
+of being refused, and nothing is guessed silently.
+
+**The ceiling is checked one byte past its limit.** `readBounded` allocates
+`maxBytes + 1` so a file of exactly the ceiling is accepted and one byte more is
+refused. A read that stopped at the ceiling could not distinguish them; that is
+what the `stream one byte past the ceiling` test pins.
+
+### 9.4 Evidence (run in this sandbox)
+
+A JDK and the Kotlin compiler were provisioned here (Temurin `17.0.21.1`,
+kotlinc `1.9.24`, jars from `repo.maven.apache.org` and Google Maven), so the
+tracked harness ran locally rather than only in GitHub Actions.
+
+| Check | Command | Result |
+|---|---|---|
+| Harness on the base tree `7c4e6a6` | `bash ci/run-ci.sh --check` | `total_tests=441`, both jobs exit 0 |
+| Harness on this branch | `bash ci/run-ci.sh --check` | `total_tests=460`, both jobs exit 0 |
+| Job 1 (app core) | — | 291 tests, `OK (291 tests)` |
+| Job 2 (narration core) | — | 169 tests, `OK (169 tests)` |
+| Tree hygiene | `python3 ci/hygiene.py` | `no tracked bytecode cache` |
+
+The `460 - 441 = 19` delta is exactly the new `DocumentImportTest` nodes
+(`ci/scope.py` on this branch includes the file; `DocumentImport.kt` imports only
+`java.io` / `java.nio` and pure-JVM Sonata types, so both are in scope).
+
+**The 3 wiring assertions do not run in this harness.** `ci/scope.py` excludes
+`ProcessTextHandoffTest.kt` because it names `MainActivity` inside a string
+literal, and `references()` scans string literals deliberately. That exclusion is
+**pre-existing** — the file is `OUT` on the base tree too, for the same reason —
+and it is not a defect introduced here. Those 3 assertions run in the Gradle
+unit-test job, which is the only job that compiles the whole tree.
+
+### 9.5 Negative controls
+
+| Control | Result |
+|---|---|
+| `a NUL byte late in the file is still binary` — NUL at byte 50,001 | refused `BINARY`; a prefix-only scan would accept and speak binary |
+| `a stream one byte past the ceiling is refused` | `OverCeiling`; without the extra byte it is indistinguishable from the accepted case |
+| `a file exactly at the byte ceiling is not refused for size` | accepted, so the ceiling is not off-by-one in the refusing direction |
+| `the selection menu stays plain text` | fails if the `SEND` widening is applied to `PROCESS_TEXT` as well |
+
+### 9.6 What is NOT claimed
+
+- **Not device-validated.** No APK was installed and no share was performed
+  through a real share sheet. The Android-bound part (stream open, display-name
+  query, toasts) is compiled by the Gradle job and asserted at source level, not
+  observed on hardware.
+- **No document is persisted with its title yet.** `DocumentImport` produces a
+  title from the file name, and the activity shows it, but the imported text is
+  handed to the reader as text — it is not yet written to the library as a
+  `DocumentSource.IMPORTED` row. That is the next S3 slice, and it is what makes
+  "Multiple documents" and "Local document library" true.
+- **No bookmarks, no resume-after-process-death for imported documents.** Both
+  remain open S3 criteria.
+- **No engine, model, or playback change.** A10 (the neural tier) is untouched
+  and still the blocking item for S2.
+
+### 9.7 A merge hazard this workstream shares with two open PRs
+
+`docs/SONATA_IMPLEMENTATION_LEDGER.md` and `ci-evidence.log` are each a single
+append point, and every Sonata slice appends to both. Measured here:
+
+```
+git merge refs/remotes/pr/11   (onto refs/remotes/pr/10)
+CONFLICT (content): Merge conflict in ci-evidence.log
+CONFLICT (content): Merge conflict in docs/SONATA_IMPLEMENTATION_LEDGER.md
+```
+
+The **source** changes of #10 and #11 compose cleanly; only the two evidence
+files conflict. This PR avoids the second conflict by running the harness with
+`--check`, which leaves `ci-evidence.log` alone, so it touches one evidence file
+rather than two.
+
+Recorded, not repaired: giving each slice its own evidence file (and letting the
+ledger reference it) would remove the class. That is a repository-structure
+change touching three open PRs and is a separate decision for the owner.

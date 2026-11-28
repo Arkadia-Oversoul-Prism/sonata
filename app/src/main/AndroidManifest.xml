@@ -54,7 +54,14 @@
              Two routes in, both handled by ProcessTextActivity:
              PROCESS_TEXT is the text-selection menu; SEND is the system share
              sheet. Only the first was declared, so "share to Sonata" silently
-             never appeared even though the code accepted EXTRA_TEXT. -->
+             never appeared even though the code accepted EXTRA_TEXT.
+
+             SEND is declared for `text/*`, not `text/plain`, because a file
+             shared from a file manager arrives with its own media type —
+             `text/markdown` for a `.md`, and a vendor type for some `.txt`
+             providers. At `text/plain` those files never reached Sonata at all,
+             which is why the S3 import step appeared not to exist. The type is a
+             routing hint only: what is accepted is decided by DocumentImport. -->
         <activity
             android:name=".ProcessTextActivity"
             android:exported="true"
@@ -68,7 +75,7 @@
             <intent-filter>
                 <action android:name="android.intent.action.SEND" />
                 <category android:name="android.intent.category.DEFAULT" />
-                <data android:mimeType="text/plain" />
+                <data android:mimeType="text/*" />
             </intent-filter>
         </activity>
 
