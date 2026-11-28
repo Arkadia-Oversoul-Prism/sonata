@@ -78,4 +78,64 @@ class ProcessTextHandoffTest {
         assertTrue("the More panel must exist", layout.contains("panelMore"))
         assertTrue("and start hidden", layout.contains("android:visibility=\"gone\""))
     }
+
+    // ── Shared files (S3 import) ─────────────────────────────────────────────
+
+    /** The `<intent-filter>` block that declares [action], and nothing else. */
+    private fun filterFor(action: String): String {
+        val manifest = read("AndroidManifest.xml")
+        val at = manifest.indexOf("android:name=\"$action\"")
+        assertTrue("no intent-filter declares $action", at >= 0)
+        val start = manifest.lastIndexOf("<intent-filter>", at)
+        val end = manifest.indexOf("</intent-filter>", at)
+        return manifest.substring(start, end)
+    }
+
+    /**
+     * A file shared from a file manager arrives with its own media type, so a SEND
+     * filter narrowed to `text/plain` never matched it. That is the whole reason the
+     * import step appeared not to exist.
+     */
+    @Test
+    fun `the share filter admits a text file, not only a plain-text body`() {
+        val send = filterFor("android.intent.action.SEND")
+        assertTrue(
+            "the SEND filter must admit text/* so a shared .txt or .md reaches the app; " +
+                "at text/plain it is never offered",
+            send.contains("android:mimeType=\"text/*\""),
+        )
+    }
+
+    /**
+     * Negative control for the widening above: the selection menu stays `text/plain`.
+     * A change that widened both would let Sonata claim selections it cannot read.
+     */
+    @Test
+    fun `the selection menu stays plain text`() {
+        val processText = filterFor("android.intent.action.PROCESS_TEXT")
+        assertTrue(
+            "PROCESS_TEXT is a text selection; it must not be widened with the share filter",
+            processText.contains("android:mimeType=\"text/plain\""),
+        )
+    }
+
+    @Test
+    fun `the handoff reads a shared file when there is no text`() {
+        val src = read("kotlin/com/arkadia/sonata/ProcessTextActivity.kt")
+        assertTrue(
+            "a shared file arrives as EXTRA_STREAM; without reading it a .txt share " +
+                "answers 'No text selected'",
+            src.contains("Intent.EXTRA_STREAM"),
+        )
+        assertTrue(
+            "and the decision about what is acceptable belongs to DocumentImport, not " +
+                "to the activity",
+            src.contains("DocumentImport.import"),
+        )
+        assertTrue(
+            "the stream is read under a ceiling, so a huge file is refused rather than " +
+                "loaded whole",
+            src.contains("DocumentImport.readBounded"),
+        )
+    }
 }
