@@ -62,14 +62,19 @@ class SpeechService : Service() {
     private var currentEngine: TtsEngineKind? = null
 
     /**
-     * True from the moment a read is dispatched until it ends.
+     * What this service's current utterance is.
      *
-     * Distinguishes "this failure ended a read" from "this failure belongs to
-     * something else" — a voice preview reports errors through the same listener,
-     * and recording one of those as the passage's outcome would tell the user a
-     * read they never started had failed.
+     * Distinguishes "this event ended a read" from "this event belongs to
+     * something else" — a voice preview reports through the same listener, and
+     * recording one of those as the passage's outcome would tell the user a read
+     * they never started had failed.
+     *
+     * A boolean was not enough to answer that. A sample supersedes the read, so
+     * "a read is in progress" stayed true while the sample ran, and the sample's
+     * failure was recorded against the passage. [UtteranceAttributionPolicy] now
+     * decides from what is actually in flight.
      */
-    private var reading = false
+    private var inFlight: InFlightUtterance = InFlightUtterance.NONE
 
     // ── Lifecycle callbacks exposed to bound clients ────────────────────────
     //
@@ -133,7 +138,7 @@ class SpeechService : Service() {
                 currentLabel  = command.label
                 lastError     = null
                 fellBackOffline = false
-                reading = true
+                inFlight = InFlightUtterance.READ
                 promoteToForeground(playing = true)
                 tts.speakFrom(command.text, command.fromChar)
             }
@@ -144,6 +149,10 @@ class SpeechService : Service() {
             // is good. It runs in the service so it reuses the engine, transport and
             // player, then stops itself when the utterance completes.
             is SpeechCommand.Preview -> {
+                // The sample supersedes any read, so this service is no longer reading
+                // a passage. Saying so is what keeps the sample's terminal event from
+                // being recorded as the passage's outcome.
+                inFlight = InFlightUtterance.PREVIEW
                 previewVoiceId = command.voiceId
                 lastError = null
                 clients.forEach { it.onPreviewStart(command.voiceId) }
@@ -152,7 +161,7 @@ class SpeechService : Service() {
 
             SpeechCommand.Pause  -> { tts.pause();  updateNotification(playing = false) }
             SpeechCommand.Resume -> { tts.resume(); updateNotification(playing = true)  }
-            SpeechCommand.Stop   -> { reading = false; stopSelf() }
+            SpeechCommand.Stop   -> { inFlight = InFlightUtterance.NONE; stopSelf() }
 
             // No action, or a SPEAK with no speakable text: do not claim
             // foreground for work that will not happen.
@@ -219,7 +228,7 @@ class SpeechService : Service() {
 
     fun pause()  { tts.pause();  updateNotification(playing = false) }
     fun resume() { tts.resume(); updateNotification(playing = true)  }
-    fun stop()   { reading = false; tts.stop(); stopForeground(STOP_FOREGROUND_REMOVE); stopSelf() }
+    fun stop()   { inFlight = InFlightUtterance.NONE; tts.stop(); stopForeground(STOP_FOREGROUND_REMOVE); stopSelf() }
 
     val isPlaying get() = tts.isPlaying
     val isPaused  get() = tts.isPaused
@@ -275,8 +284,9 @@ class SpeechService : Service() {
             // A finished preview is not a finished read. Reporting it as one would
             // tell the main screen the passage had been read, which it has not, and
             // the sample is not the passage.
-            if (tts.isPreviewing) {
+            if (inFlight == InFlightUtterance.PREVIEW) {
                 previewVoiceId = null
+                inFlight = InFlightUtterance.NONE
                 stopForeground(STOP_FOREGROUND_REMOVE)
                 stopSelf()
                 return
@@ -286,15 +296,15 @@ class SpeechService : Service() {
             // Recorded before stopSelf(): this instance is about to die, and a
             // screen that was not bound at this moment would otherwise come back
             // to "Ready" for a read that reached the end.
-            if (reading) {
+            if (UtteranceAttributionPolicy.onComplete(inFlight) == TerminalRecord.COMPLETION) {
                 prefs.rememberOutcome(currentText, ReadOutcome.Status.COMPLETED, null)
                 // The passage was read to the end, so there is nothing left to carry
                 // on to. Without this the last mid-read checkpoint — up to
                 // CHECKPOINT_MS stale — survives completion, and the screen offers to
                 // resume a passage that is already finished.
                 prefs.rememberProgress(currentText, 0)
-                reading = false
             }
+            inFlight = InFlightUtterance.NONE
             // Notified before stopSelf(): the service is gone by the time the last
             // client runs, and a client that only learns of completion from a
             // destroyed service can never dismiss itself.
@@ -314,11 +324,13 @@ class SpeechService : Service() {
             if (fellBackTo == null) {
                 // A terminal failure of a read. Recorded for the same reason as a
                 // completion: the screen may not be bound, and the service is about
-                // to stop. A preview's failure is not a read's, so it is not recorded.
-                if (reading) {
+                // to stop. A sample's failure is not a read's — the read a sample
+                // superseded was interrupted by the user, not failed — so
+                // [UtteranceAttributionPolicy] decides from what is in flight.
+                if (UtteranceAttributionPolicy.onTerminalError(inFlight) == TerminalRecord.FAILURE) {
                     prefs.rememberOutcome(currentText, ReadOutcome.Status.FAILED, msg)
-                    reading = false
                 }
+                inFlight = InFlightUtterance.NONE
                 currentEngine = null
                 stopForeground(STOP_FOREGROUND_REMOVE)
                 stopSelf()
