@@ -107,10 +107,7 @@ class OfflineEngine(
             }
 
             is SynthesisOutput.Success -> {
-                if (output.pcm.isEmpty()) {
-                    repository.failNarration(narrationId, "The model produced no audio")
-                    return NarrationOutcome.Failure("The model produced no audio")
-                }
+                refuseEmptyAudio(narrationId, output)?.let { return it }
                 val wav = WavWriter.wrap(output.pcm, output.sampleRate)
                 val file = fileStore.write(narrationId, wav)
                 val duration = if (output.durationMs > 0) {
@@ -174,6 +171,7 @@ class OfflineEngine(
             }
 
             is SynthesisOutput.Success -> {
+                refuseEmptyAudio(narrationId, output)?.let { return it }
                 val wav = WavWriter.wrap(output.pcm, output.sampleRate)
                 val file = fileStore.write(narrationId, wav)
                 val duration = if (output.durationMs > 0) {
@@ -188,6 +186,25 @@ class OfflineEngine(
                 }
             }
         }
+    }
+
+    /**
+     * Refuse a synthesis that produced no samples, or null when there is audio.
+     *
+     * Stated once because both completion paths must apply it and only one did:
+     * `retry` wrote a header-only WAV, marked the row COMPLETE and left
+     * [com.arkadia.sonata.data.LibraryRules.isPlayable] offering 44 bytes of
+     * silence as the user's narration. An empty buffer is a model that did not
+     * speak, so it is a failure, never stored audio.
+     */
+    private suspend fun refuseEmptyAudio(
+        narrationId: Long,
+        output: SynthesisOutput.Success,
+    ): NarrationOutcome.Failure? {
+        if (output.pcm.isNotEmpty()) return null
+        val reason = "The model produced no audio"
+        repository.failNarration(narrationId, reason)
+        return NarrationOutcome.Failure(reason)
     }
 
     /**

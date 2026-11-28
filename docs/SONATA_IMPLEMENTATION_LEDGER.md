@@ -484,3 +484,84 @@ The 418 - 405 = 13 delta is exactly the new `TextNormalizerCaseTest` nodes
   without addressing the heading defect.
 - No engine, model, playback, or UI change. `EngineFactory` is still not called
   from the UI, which remains the next slice.
+
+## 9. S4 — empty audio is not stored audio (append-only)
+
+**Date:** 2026-11-28
+**Base:** `7c4e6a64e39e34685b06e2e1698cf9eb896b9720` (branch `fix/engine-empty-audio-truth-01`, PR #11)
+
+### 9.1 The defect
+
+`OfflineEngine` has two completion paths, `narrate` and `retry`, and the rule
+"a `Success` with no samples is a failure" was written in one of them. `retry`
+had no such check.
+
+A model returning `Success(pcm = ByteArray(0))` therefore reached
+`WavWriter.wrap`, which returns a 44-byte header-only WAV (no exception — the
+`require` calls guard the sample rate, channels and bit depth, not the payload).
+`completeNarration` accepted `GENERATING -> COMPLETE`, and
+`LibraryRules.isPlayable` answered `true`, because it asks only for `COMPLETE`
+plus a non-blank `audioPath`.
+
+Measured on the base tree by driving `retry` with an empty buffer:
+
+```
+outcome        = Success
+row.status     = COMPLETE
+row.audioPath  = <tmp>/1.wav
+store.allIds() = [1]
+bytesFor(1)    = 44
+isPlayable     = true
+```
+
+That is a false claim of stored audio. It contradicts this ledger's own §3
+ordering rule — *"A failure at any point after step 2 leaves the row `FAILED`
+with a reason, never `COMPLETE`"* — and it is S4's acceptance criterion
+*"No false claim of stored audio when none exists"*.
+
+### 9.2 The repair
+
+The refusal is stated once, in `OfflineEngine.refuseEmptyAudio`, and both paths
+call it. The distinct message each path emits when the *transition* is refused
+is unchanged: those are different situations and collapsing them would lose
+information.
+
+After the repair the same measurement reads `Failure`, `FAILED`,
+`audioPath = null`, `store.allIds() = []`, `isPlayable = false`.
+
+### 9.3 Evidence (run in this sandbox)
+
+Toolchain as in §8.3: Temurin `17.0.21.1`, kotlinc `1.9.24`, the same jar set.
+`ci-evidence.log` was regenerated and is committed with the change.
+
+| Check | Command | Result |
+|---|---|---|
+| Baseline, unmodified `7c4e6a64` | `bash ci/run-ci.sh --check` | `total_tests=441`, job1/job2 exit 0 |
+| Two tests added, **repair absent** | `bash ci/run-ci.sh --check` | job1 exit **1**; `retry refuses…` fails at `assertTrue(outcome is Failure)` |
+| Repair applied | `bash ci/run-ci.sh --check` | `total_tests=443`, job1/job2 exit 0 |
+| **Negative control** — `if (true) return null` at the rule's definition | `bash ci/run-ci.sh` | `Tests run: 274, Failures: 2` — exactly the two new nodes |
+| Rule restored | `sha256sum OfflineEngine.kt` | `77dd8f4d…`, identical to the repaired file |
+
+The 441 -> 443 delta is exactly the two new nodes. The negative control disables
+the behaviour at its **definition** rather than at a call site, so both paths are
+exercised rather than one.
+
+### 9.4 Not claimed
+
+- **Not device-validated**, and no Gradle or Android SDK build was run. The
+  harness is pure JVM; `android_sdk=ABSENT` is recorded in `ci-evidence.log`.
+- **`retry` has no production caller yet.** `grep -rn '\.retry(' app/src/main/kotlin`
+  returns nothing, so this is a boundary repaired before the recovery UI is wired
+  to it. It is not a user-visible fix today.
+- **No neural model, no voice-quality change.** L1 and L4 in
+  `SONATA_KNOWN_LIMITATIONS.md` stand as written; the voice is still the platform
+  engine's.
+
+### 9.5 Next deterministic task
+
+S2 — a natural offline neural voice — remains unstarted and is the next unowned
+slice. The `engine/` package already carries the compatibility gate
+(`ModelCompatibility`, `BundledModels`, `DeviceProfile`) and no model file, so the
+first real step is a bundled licensed model plus a device measurement, not more
+policy code. PRs #9 (S1 service lifecycle) and #10 (screen reaches the engine)
+are CI-green drafts awaiting human review and must not be duplicated.
