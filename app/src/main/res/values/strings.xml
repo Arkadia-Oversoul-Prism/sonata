@@ -21,7 +21,10 @@
     <string name="state_speaking">Speaking</string>
     <string name="state_buffering">Buffering</string>
     <string name="state_paused">Paused</string>
+    <string name="state_completed">Finished</string>
+    <string name="state_failed">Could not read</string>
     <string name="substate_ready">Paste text, or select some in any app</string>
+    <string name="substate_completed">Reached the end of the passage</string>
 
     <string name="hint_passage">Paste or type anything to hear it</string>
     <string name="hint_handoff">To read text from another app: select it, open the ⋮ menu, and choose Sonata.</string>

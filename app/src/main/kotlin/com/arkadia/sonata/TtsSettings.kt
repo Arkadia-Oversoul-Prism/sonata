@@ -21,4 +21,15 @@ interface TtsSettings {
 
     /** Whether to attempt online synthesis when a backend URL is configured. */
     val preferOnline: Boolean
+
+    /**
+     * Whether this build can reach the network at all.
+     *
+     * A capability, not a preference. [preferOnline] says what the user asked for;
+     * this says what the build permits. They are separate because treating them as
+     * one is what made the app attempt a socket it cannot open: the manifest
+     * declares no `INTERNET` permission, so every read started with a request that
+     * could only fail. See [SynthesisTierPolicy].
+     */
+    val networkReachable: Boolean
 }

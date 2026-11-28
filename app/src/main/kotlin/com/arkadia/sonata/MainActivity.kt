@@ -58,11 +58,32 @@ class MainActivity : AppCompatActivity() {
 
     private var lastCheckpointAt = 0L
 
+    /**
+     * The read's own facts, which the engine cannot report.
+     *
+     * When a read finishes the engine is idle again and the service stops itself,
+     * so "finished", "failed" and "never started" are the same engine state. These
+     * three flags are what let the screen tell them apart — see [PlaybackPhase].
+     */
+    private var readPreparing = false
+    private var readCompleted = false
+    private var readFailure: String? = null
+
+    /**
+     * When the wait recorded by [readPreparing] began.
+     *
+     * Read only while [readPreparing] is true, so the sites that clear the flag do
+     * not have to clear this too — a stale instant cannot produce a phase, because
+     * [PlaybackPhasePolicy.decide] consults `preparing` first.
+     */
+    private var preparingSince = 0L
+
     private val conn = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName, binder: IBinder) {
             speechService = (binder as SpeechService.LocalBinder).getService()
             bound = true
             speechService?.addClient(uiClient)
+            adoptStoredOutcome()
             render()
         }
 
@@ -70,6 +91,9 @@ class MainActivity : AppCompatActivity() {
             speechService?.removeClient(uiClient)
             speechService = null
             bound = false
+            // Nothing is in flight that this screen can observe any more. A stale
+            // "preparing" would otherwise outlive the service it described.
+            readPreparing = false
             render()
         }
     }
@@ -82,7 +106,12 @@ class MainActivity : AppCompatActivity() {
      * whichever bound last took the events from the other.
      */
     private val uiClient = object : SpeechService.Client {
-        override fun onStart() { render(); startTicker() }
+        override fun onStart() {
+            // Audio has started, so the synthesis wait is over.
+            readPreparing = false
+            render()
+            startTicker()
+        }
 
         override fun onPreviewStart(voiceId: String) {
             val voice = BackendConfig.VOICES.firstOrNull { it.id == voiceId }
@@ -96,8 +125,41 @@ class MainActivity : AppCompatActivity() {
             render()
         }
         override fun onResume() { render(); startTicker() }
-        override fun onComplete() { stopTicker(); render() }
-        override fun onError(msg: String) { showNotice(msg); render() }
+
+        override fun onComplete() {
+            stopTicker()
+            // The engine has no completion state, and the service stops itself next,
+            // so the fact is recorded here or it is lost.
+            readPreparing = false
+            readCompleted = true
+            readFailure = null
+            render()
+        }
+
+        override fun onError(msg: String) {
+            readPreparing = false
+            // A fallback failure is not a terminal one: the read continues on the
+            // offline voice, and [PlaybackPhasePolicy] keeps a live read live. The
+            // message still reaches the user as a notice.
+            readFailure = msg
+            readCompleted = false
+            showNotice(msg)
+            render()
+        }
+
+        /**
+         * The auditioning sample ended; [message] is why it failed, or null.
+         *
+         * The sample is not the passage. Painting the read's terminal phases from it
+         * would claim "the read stopped" for a passage the user merely interrupted to
+         * hear a voice, so the reason is shown as a notice and the read's own state is
+         * repainted from its own facts.
+         */
+        override fun onPreviewEnd(message: String?) {
+            if (message != null) showNotice(message)
+            render()
+            if (PlaybackPhasePolicy.keepsTicking(surfacePhase())) startTicker()
+        }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -408,10 +470,44 @@ class MainActivity : AppCompatActivity() {
         readFrom(at)
     }
 
+    /**
+     * Present the outcome of a read that ended while this screen was not bound.
+     *
+     * The service records how a read ended before it stops itself, so a read that
+     * finished while the user was in another app comes back as Completed rather
+     * than Ready — the state the screen could previously only show while it was
+     * watching. [ReadOutcomePolicy] withholds the record when it describes
+     * different text or would paint over a read that is running now.
+     */
+    private fun adoptStoredOutcome() {
+        val stored = prefs.consumeOutcome() ?: return
+        val outcome = ReadOutcomePolicy.adopt(
+            stored = stored,
+            currentPassage = binding.etText.text?.toString().orEmpty(),
+            live = speechService?.isPlaying == true || speechService?.isPaused == true,
+        ) ?: return
+        readPreparing = false
+        when (outcome.status) {
+            ReadOutcome.Status.COMPLETED -> {
+                readCompleted = true
+                readFailure = null
+            }
+            ReadOutcome.Status.FAILED -> {
+                readCompleted = false
+                readFailure = outcome.message
+            }
+        }
+    }
+
     private fun stopRead() {
         rememberProgress()
         speechService?.stop()
         stopTicker()
+        // A deliberate stop is neither a finish nor a failure: the passage is
+        // unfinished and the screen goes back to ready.
+        readPreparing = false
+        readCompleted = false
+        readFailure = null
         render()
     }
 
@@ -446,11 +542,20 @@ class MainActivity : AppCompatActivity() {
         clearNotice()
         rememberPassage()
         readingPassage = text
+        // A new read supersedes any outcome still on record: presenting the previous
+        // read's "Completed" over one the user just started would be a false claim.
+        prefs.clearOutcome()
         // A fresh read of the same passage restarts from the top, so any stored
         // position is no longer where the user is.
         prefs.rememberProgress(text, fromChar)
-        binding.tvState.text = getString(R.string.state_preparing)
-        binding.tvSubstate.text = "Starting the voice…"
+        // The wait is real: the engine has to prepare the first piece, and until
+        // audio starts the screen is neither playing nor paused. Recorded here so
+        // render() can say so instead of showing a stale line.
+        readPreparing = true
+        preparingSince = SystemClock.elapsedRealtime()
+        readCompleted = false
+        readFailure = null
+        render()
         startForegroundService(
             Intent(this, SpeechService::class.java).apply {
                 action = SpeechService.ACTION_SPEAK
@@ -526,14 +631,22 @@ class MainActivity : AppCompatActivity() {
             overlayDeniedNoticeShown = false
             showNotice("Floating player enabled — tap Float to use it")
         }
+        // A wait that elapsed while the screen was away has no tick to be noticed
+        // on, so it is settled here before the first paint.
+        settlePreparation()
         render()
-        if (speechService?.isPlaying == true || speechService?.isPaused == true) startTicker()
+        if (PlaybackPhasePolicy.keepsTicking(surfacePhase())) startTicker()
     }
 
     override fun onStop() {
         super.onStop()
         stopTicker()
         rememberPassage()
+        // The client is removed below, so a start that happens while the screen is
+        // away is never delivered here. Clearing the wait keeps the screen from
+        // reporting a preparation that may already be over; live state is read
+        // again on the next bind.
+        readPreparing = false
         if (bound) {
             speechService?.removeClient(uiClient)
             runCatching { unbindService(conn) }
@@ -562,11 +675,43 @@ class MainActivity : AppCompatActivity() {
     // ── Rendering ─────────────────────────────────────────────────────────────
 
     /**
-     * Poll the engine's real progress while a read is playing.
+     * Retire a wait that has gone on too long.
      *
-     * The engine exposes characters spoken, not a percentage, because a segmented
-     * read has no single audio file to ask for a duration. The ticker is what turns
-     * that into a bar and a position, and it stops the moment nothing is playing.
+     * A preparation is a fact the screen holds, not one the engine reports, so
+     * nothing outside this class will ever correct it. Left alone it outlives the
+     * service it described, and "Preparing…" becomes indistinguishable from a
+     * screen that is simply stuck. Past the deadline the read is recorded as
+     * failed with the reason, which is the one claim the evidence supports.
+     */
+    private fun settlePreparation() {
+        if (!readPreparing) return
+        val waited = SystemClock.elapsedRealtime() - preparingSince
+        if (!PlaybackPhasePolicy.preparationExpired(waited)) return
+        readPreparing = false
+        readCompleted = false
+        readFailure = STALLED_VOICE_MESSAGE
+    }
+
+    /** The screen's phase, from the engine's live state and the read's own facts. */
+    private fun surfacePhase(): PlaybackPhase = PlaybackPhasePolicy.decide(
+        PlaybackObservation(
+            bound = bound,
+            playing = speechService?.isPlaying == true,
+            paused = speechService?.isPaused == true,
+            bufferingNext = speechService?.isBufferingNext == true,
+            preparing = readPreparing,
+            completed = readCompleted,
+            failure = readFailure,
+        ),
+    )
+
+    /**
+     * Repaint while the surface still has something to report.
+     *
+     * The continue test is the phase policy, not the engine's own
+     * `isPlaying || isPaused`: during preparation the engine is neither, so that
+     * test stopped the ticker on its first pass and nothing was left to notice the
+     * read starting — or the wait expiring.
      */
     private fun startTicker() {
         if (tickerRunning) return
@@ -574,8 +719,9 @@ class MainActivity : AppCompatActivity() {
         ticker.post(object : Runnable {
             override fun run() {
                 if (!tickerRunning) return
+                settlePreparation()
                 render()
-                if (speechService?.isPlaying == true || speechService?.isPaused == true) {
+                if (PlaybackPhasePolicy.keepsTicking(surfacePhase())) {
                     // Checkpoint the position at a human pace, not on every frame. A
                     // SharedPreferences write allocates and schedules a disk write,
                     // and 2.5 of those a second is pure waste — the position only
@@ -616,22 +762,32 @@ class MainActivity : AppCompatActivity() {
         val active = playing || paused
 
         // ── State line ────────────────────────────────────────────────────────
-        binding.tvState.text = when {
-            playing && svc?.isBufferingNext == true -> getString(R.string.state_buffering)
-            playing -> getString(R.string.state_speaking)
-            paused -> getString(R.string.state_paused)
-            bound -> getString(R.string.state_ready)
-            else -> getString(R.string.state_starting)
+        // One decision, then one rendering of it. The two lines used to be decided
+        // independently, so a read that had ended showed "Ready / Paste text…" —
+        // the same screen as one that never started.
+        val phase = surfacePhase()
+
+        binding.tvState.text = when (phase) {
+            PlaybackPhase.BUFFERING -> getString(R.string.state_buffering)
+            PlaybackPhase.PLAYING -> getString(R.string.state_speaking)
+            PlaybackPhase.PAUSED -> getString(R.string.state_paused)
+            PlaybackPhase.COMPLETED -> getString(R.string.state_completed)
+            PlaybackPhase.FAILED -> getString(R.string.state_failed)
+            PlaybackPhase.PREPARING -> getString(R.string.state_preparing)
+            PlaybackPhase.READY -> getString(R.string.state_ready)
+            PlaybackPhase.STARTING -> getString(R.string.state_starting)
         }
 
         // ── Substate: what is happening, specifically ─────────────────────────
-        binding.tvSubstate.text = when {
-            playing && svc?.isBufferingNext == true ->
-                "Fetching the next part of the passage…"
-            playing -> readProgressLabel(svc)
-            paused -> "Tap play to carry on from here"
-            bound -> getString(R.string.substate_ready)
-            else -> "Connecting to the player…"
+        binding.tvSubstate.text = when (phase) {
+            PlaybackPhase.BUFFERING -> "Fetching the next part of the passage…"
+            PlaybackPhase.PLAYING -> readProgressLabel(svc)
+            PlaybackPhase.PAUSED -> "Tap play to carry on from here"
+            PlaybackPhase.COMPLETED -> getString(R.string.substate_completed)
+            PlaybackPhase.FAILED -> readFailure.orEmpty()
+            PlaybackPhase.PREPARING -> "Starting the voice…"
+            PlaybackPhase.READY -> getString(R.string.substate_ready)
+            PlaybackPhase.STARTING -> "Connecting to the player…"
         }
 
         // ── Progress ──────────────────────────────────────────────────────────
@@ -683,10 +839,18 @@ class MainActivity : AppCompatActivity() {
         }
 
         // ── Backend label, when More is open ──────────────────────────────────
-        binding.tvBackend.text = if (prefs.preferEdgeTts) {
-            "Voice: Arkadia neural (${prefs.backendUrl})"
-        } else {
-            "Voice: this device's speech engine"
+        // The tier the engine will actually use, not the stored preference. A label
+        // that names the neural voice while the app can only reach the device's own
+        // engine is the same untruth as the failed request behind it.
+        binding.tvBackend.text = when (
+            SynthesisTierPolicy.choose(
+                preferOnline = prefs.preferEdgeTts,
+                backendUrl = prefs.backendUrl,
+                networkReachable = prefs.networkReachable,
+            )
+        ) {
+            TtsEngineKind.ONLINE -> "Voice: Arkadia neural (${prefs.backendUrl})"
+            TtsEngineKind.OFFLINE -> "Voice: this device's speech engine"
         }
     }
 
@@ -770,6 +934,15 @@ class MainActivity : AppCompatActivity() {
 
     private companion object {
         const val TAG = "SonataMain"
+
+        /**
+         * What the screen says when a dispatched read never produced a sample.
+         *
+         * Rendered as the FAILED substate, which is the phase the deadline puts the
+         * read in. It is a claim about what the screen saw, not a diagnosis: the
+         * engine may be slow, unavailable, or gone.
+         */
+        const val STALLED_VOICE_MESSAGE = "The voice did not start — tap Read aloud to try again"
 
         /** Used only for the "about N minutes" estimate on the count line. */
         const val WORDS_PER_MINUTE = 150

@@ -130,6 +130,16 @@ class FloatingOverlayService : Service() {
         override fun onError(msg: String) {
             binding.tvPreview.text = msg
         }
+
+        /**
+         * The sample ended. It is not the read, so it must not dismiss the player:
+         * the window represents the passage, and auditioning a voice is not a reason
+         * to lose the read's controls. Its own line carries the reason, if any.
+         */
+        override fun onPreviewEnd(message: String?) {
+            if (message != null) binding.tvPreview.text = message
+            updatePlayPause()
+        }
     }
 
     // ── Foreground ─────────────────────────────────────────────────────────

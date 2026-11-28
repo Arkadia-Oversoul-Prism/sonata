@@ -51,6 +51,7 @@ class TtsEngineOnlineTest {
         offlineReady: Boolean = true,
         backendUrl: String = "https://example.test",
         preferOnline: Boolean = true,
+        networkReachable: Boolean = true,
         prefetchDepth: Int = 0,
         maxRetries: Int = TtsEngine.DEFAULT_MAX_RETRIES,
         retryBaseDelayMs: Long = TtsEngine.DEFAULT_RETRY_BASE_DELAY_MS,
@@ -59,7 +60,11 @@ class TtsEngineOnlineTest {
         val player = FakeAudioPlayer()
         val offline = FakeOfflineVoice(ready = offlineReady)
         val listener = RecordingListener()
-        val settings = FakeSettings(backendUrl = backendUrl, preferOnline = preferOnline)
+        val settings = FakeSettings(
+            backendUrl = backendUrl,
+            preferOnline = preferOnline,
+            networkReachable = networkReachable,
+        )
         val cacheDir = temp.newFolder("cache")
         val engine = TtsEngine(
             settings = settings,
@@ -833,5 +838,103 @@ class TtsEngineOnlineTest {
 
         assertTrue(h.transport.requests.isEmpty())
         assertEquals(1, h.offline.utterances.size)
+    }
+
+    // ── A build that cannot reach the network ─────────────────────────────────
+
+    /**
+     * The shipped build declares no `INTERNET` permission, so a socket cannot be
+     * opened. The engine must not spend its retry budget and backoff discovering
+     * that: the first thing the user hears must be speech, not a delay followed by
+     * an `UnknownHostException`.
+     *
+     * The preference stays on in these tests — that is the production configuration
+     * (`Prefs.preferEdgeTts` defaults to true and a backend URL is shipped), and it
+     * is what made the defect invisible: every input the engine looked at said
+     * "online".
+     */
+    @Test
+    fun `an unreachable build speaks offline without a single network attempt`() = runTest {
+        val h = harness(this, preferOnline = true, networkReachable = false)
+
+        h.engine.speak("Reading without a socket")
+        advanceUntilIdle()
+
+        assertTrue(
+            "no request may be attempted when the build cannot reach the network",
+            h.transport.requests.isEmpty(),
+        )
+        assertEquals(1, h.offline.utterances.size)
+        assertEquals("Reading without a socket", h.offline.utterances[0].text)
+        assertEquals(listOf(TtsEngineKind.OFFLINE), h.listener.starts.map { it.engine })
+    }
+
+    @Test
+    fun `an unreachable build reports no failure, because nothing failed`() = runTest {
+        // The transport is given a failure on purpose. Without the gate this read
+        // attempts it, retries, and reports a degradation — the `UnknownHostException`
+        // path the user actually saw. With the gate the transport is never asked, so
+        // there is nothing to report.
+        val h = harness(
+            this,
+            result = SynthesisResult.Failure("no route to host", transient = false),
+            preferOnline = true,
+            networkReachable = false,
+        )
+
+        h.engine.speak("No error is expected")
+        advanceUntilIdle()
+
+        assertTrue(
+            "an unreachable build must not report a transport failure it never incurred",
+            h.listener.failures.isEmpty(),
+        )
+        assertEquals(1, h.offline.utterances.size)
+    }
+
+    @Test
+    fun `an unreachable build does not retry, so speech starts at once`() = runTest {
+        // With the gate removed this read costs three attempts and 1.2 s of backoff
+        // before the first word. `runCurrent` executes only what is ready now, so a
+        // retry loop would leave the offline voice silent at this point.
+        val h = harness(
+            this,
+            preferOnline = true,
+            networkReachable = false,
+            retryBaseDelayMs = 400,
+        )
+
+        h.engine.speak("Immediate")
+        runCurrent()
+
+        assertEquals(1, h.offline.utterances.size)
+        assertTrue(h.transport.requests.isEmpty())
+    }
+
+    @Test
+    fun `a reachable build still uses the online tier`() = runTest {
+        // The negative control for the three tests above: a gate that always answered
+        // "offline" would pass them all while removing the neural voice entirely.
+        val h = harness(this, preferOnline = true, networkReachable = true)
+
+        h.engine.speak("Online please")
+        advanceUntilIdle()
+
+        assertEquals(1, h.transport.requests.size)
+        assertTrue(h.offline.utterances.isEmpty())
+    }
+
+    @Test
+    fun `a preview on an unreachable build says why instead of attempting the socket`() = runTest {
+        val h = harness(this, preferOnline = true, networkReachable = false)
+
+        h.engine.preview("Sample", "aria")
+        advanceUntilIdle()
+
+        assertTrue(h.transport.requests.isEmpty())
+        assertEquals(1, h.listener.failures.size)
+        assertTrue(
+            h.listener.failures.first().msg.contains("cannot reach the network"),
+        )
     }
 }

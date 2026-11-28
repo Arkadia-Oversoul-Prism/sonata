@@ -61,6 +61,21 @@ class SpeechService : Service() {
     /** The engine that produced the current utterance, for the notification. */
     private var currentEngine: TtsEngineKind? = null
 
+    /**
+     * What this service's current utterance is.
+     *
+     * Distinguishes "this event ended a read" from "this event belongs to
+     * something else" — a voice preview reports through the same listener, and
+     * recording one of those as the passage's outcome would tell the user a read
+     * they never started had failed.
+     *
+     * A boolean was not enough to answer that. A sample supersedes the read, so
+     * "a read is in progress" stayed true while the sample ran, and the sample's
+     * failure was recorded against the passage. [UtteranceAttributionPolicy] now
+     * decides from what is actually in flight.
+     */
+    private var inFlight: InFlightUtterance = InFlightUtterance.NONE
+
     // ── Lifecycle callbacks exposed to bound clients ────────────────────────
     //
     // A list, not single slots. The main screen and the floating player are both
@@ -79,6 +94,13 @@ class SpeechService : Service() {
         fun onError(msg: String) {}
         /** A voice sample started, so the screen can show it is auditioning. */
         fun onPreviewStart(voiceId: String) {}
+
+        /**
+         * The auditioning sample ended; [message] is why it failed, or null if it
+         * finished. Separate from [onComplete] and [onError] because a sample
+         * supersedes the read: its end is not the passage's end.
+         */
+        fun onPreviewEnd(message: String? = null) {}
     }
 
     fun addClient(client: Client) {
@@ -87,6 +109,23 @@ class SpeechService : Service() {
 
     fun removeClient(client: Client) {
         clients -= client
+    }
+
+    /**
+     * Deliver a terminal event to the line it belongs to.
+     *
+     * [surface] is decided by the caller *before* [inFlight] is cleared: clearing it
+     * first would make every event look unattributable, and a sample's end would be
+     * delivered as the passage's.
+     */
+    private fun notifyTerminal(surface: LiveSurface, message: String?) {
+        clients.forEach {
+            when {
+                surface == LiveSurface.PREVIEW -> it.onPreviewEnd(message)
+                message == null -> it.onComplete()
+                else -> it.onError(message)
+            }
+        }
     }
 
     /** User-presentable message for the most recent failure, if any. */
@@ -123,6 +162,7 @@ class SpeechService : Service() {
                 currentLabel  = command.label
                 lastError     = null
                 fellBackOffline = false
+                inFlight = InFlightUtterance.READ
                 promoteToForeground(playing = true)
                 tts.speakFrom(command.text, command.fromChar)
             }
@@ -133,6 +173,10 @@ class SpeechService : Service() {
             // is good. It runs in the service so it reuses the engine, transport and
             // player, then stops itself when the utterance completes.
             is SpeechCommand.Preview -> {
+                // The sample supersedes any read, so this service is no longer reading
+                // a passage. Saying so is what keeps the sample's terminal event from
+                // being recorded as the passage's outcome.
+                inFlight = InFlightUtterance.PREVIEW
                 previewVoiceId = command.voiceId
                 lastError = null
                 clients.forEach { it.onPreviewStart(command.voiceId) }
@@ -141,14 +185,17 @@ class SpeechService : Service() {
 
             SpeechCommand.Pause  -> { tts.pause();  updateNotification(playing = false) }
             SpeechCommand.Resume -> { tts.resume(); updateNotification(playing = true)  }
-            SpeechCommand.Stop   -> stopSelf()
+            SpeechCommand.Stop   -> { inFlight = InFlightUtterance.NONE; stopSelf() }
 
             // No action, or a SPEAK with no speakable text: do not claim
             // foreground for work that will not happen.
             SpeechCommand.None -> {
                 if (intent?.action == ACTION_SPEAK) {
+                    // A read was asked for and there is nothing speakable to read, so
+                    // this is the read's failure whatever was in flight before it.
+                    inFlight = InFlightUtterance.READ
                     lastError = "Nothing to read"
-                    clients.forEach { it.onError(lastError!!) }
+                    notifyTerminal(UtteranceAttributionPolicy.liveSurface(inFlight), lastError!!)
                 }
                 stopSelf(startId)
             }
@@ -208,7 +255,7 @@ class SpeechService : Service() {
 
     fun pause()  { tts.pause();  updateNotification(playing = false) }
     fun resume() { tts.resume(); updateNotification(playing = true)  }
-    fun stop()   { tts.stop();   stopForeground(STOP_FOREGROUND_REMOVE); stopSelf() }
+    fun stop()   { inFlight = InFlightUtterance.NONE; tts.stop(); stopForeground(STOP_FOREGROUND_REMOVE); stopSelf() }
 
     val isPlaying get() = tts.isPlaying
     val isPaused  get() = tts.isPaused
@@ -260,22 +307,41 @@ class SpeechService : Service() {
             currentEngine = null
             lastError = null
             stopNotifTicker()
+            // Decided before `inFlight` is cleared: an event whose in-flight fact has
+            // already been erased is unattributable, and a sample's end would reach
+            // the read's line.
+            val surface = UtteranceAttributionPolicy.liveSurface(inFlight)
 
             // A finished preview is not a finished read. Reporting it as one would
             // tell the main screen the passage had been read, which it has not, and
-            // the sample is not the passage.
-            if (tts.isPreviewing) {
+            // the sample is not the passage. The sample's own line is still told it
+            // ended, or the screen keeps claiming it is auditioning for ever.
+            if (inFlight == InFlightUtterance.PREVIEW) {
                 previewVoiceId = null
+                inFlight = InFlightUtterance.NONE
+                notifyTerminal(surface, message = null)
                 stopForeground(STOP_FOREGROUND_REMOVE)
                 stopSelf()
                 return
             }
 
             stopForeground(STOP_FOREGROUND_REMOVE)
+            // Recorded before stopSelf(): this instance is about to die, and a
+            // screen that was not bound at this moment would otherwise come back
+            // to "Ready" for a read that reached the end.
+            if (UtteranceAttributionPolicy.onComplete(inFlight) == TerminalRecord.COMPLETION) {
+                prefs.rememberOutcome(currentText, ReadOutcome.Status.COMPLETED, null)
+                // The passage was read to the end, so there is nothing left to carry
+                // on to. Without this the last mid-read checkpoint — up to
+                // CHECKPOINT_MS stale — survives completion, and the screen offers to
+                // resume a passage that is already finished.
+                prefs.rememberProgress(currentText, 0)
+            }
+            inFlight = InFlightUtterance.NONE
             // Notified before stopSelf(): the service is gone by the time the last
             // client runs, and a client that only learns of completion from a
             // destroyed service can never dismiss itself.
-            clients.forEach { it.onComplete() }
+            notifyTerminal(surface, message = null)
             stopSelf()
         }
 
@@ -287,8 +353,20 @@ class SpeechService : Service() {
                 currentEngine = it
                 fellBackOffline = true
             }
-            clients.forEach { it.onError(msg) }
+            // Decided before `inFlight` is cleared, for the same reason as onComplete:
+            // a sample's failure must reach the sample's line, not the read's.
+            val surface = UtteranceAttributionPolicy.liveSurface(inFlight)
+            notifyTerminal(surface, msg)
             if (fellBackTo == null) {
+                // A terminal failure of a read. Recorded for the same reason as a
+                // completion: the screen may not be bound, and the service is about
+                // to stop. A sample's failure is not a read's — the read a sample
+                // superseded was interrupted by the user, not failed — so
+                // [UtteranceAttributionPolicy] decides from what is in flight.
+                if (UtteranceAttributionPolicy.onTerminalError(inFlight) == TerminalRecord.FAILURE) {
+                    prefs.rememberOutcome(currentText, ReadOutcome.Status.FAILED, msg)
+                }
+                inFlight = InFlightUtterance.NONE
                 currentEngine = null
                 stopForeground(STOP_FOREGROUND_REMOVE)
                 stopSelf()

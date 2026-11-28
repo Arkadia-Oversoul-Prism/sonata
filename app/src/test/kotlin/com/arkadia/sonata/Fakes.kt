@@ -262,6 +262,12 @@ class FakeSettings(
     override var pitch: Float = 1.0f,
     override var backendUrl: String = "https://example.test",
     override var preferOnline: Boolean = true,
+    /**
+     * Defaults to reachable so the online scenarios in this suite keep testing the
+     * online path. The shipped build is the opposite — see [Prefs.networkReachable]
+     * — so a test that means the shipped build says so explicitly.
+     */
+    override var networkReachable: Boolean = true,
 ) : TtsSettings
 
 /** Records engine callbacks in order. */

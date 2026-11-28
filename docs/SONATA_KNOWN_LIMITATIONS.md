@@ -94,6 +94,38 @@ might accidentally re-enable.
 exists would leave no synthesis path at all. The removal should happen with the
 replacement.
 
+**Corrected 2026-11-27 (PR #9).** The paragraph above said the transport "cannot
+work" and stopped there, which hid a live defect: the *engine* still chose the
+online tier on every read, so the dead transport was attempted, retried twice and
+backed off before the offline voice took over. The user-visible result was an
+`UnknownHostException` on every read and a "Fetching the next part of the passage…"
+state for a fetch that was never possible. The tier decision is now
+`SynthesisTierPolicy`, and it consults the build's own capability — the manifest
+permission — rather than only the stored preference. See §2 L5a.
+
+### L5a — The tier decision is verified in JVM; its two call sites are not
+
+The decision itself — preference, gateway, capability in, tier out — is pure JVM and
+is executed by the tracked harness (`SynthesisTierPolicyTest`, 6 tests, job 1).
+
+The two places that *call* it are not executed there:
+
+| Call site | Why it is out of the JVM harness |
+|---|---|
+| `TtsEngine.start` / `TtsEngine.preview` | `TtsEngine.kt` is `FORCED_OUT` in `ci/scope.py` |
+| `MainActivity.render` (the More-row label) | The Activity needs the Android runtime |
+
+`TtsEngine`'s behaviour is covered by five tests in `TtsEngineOnlineTest`, which run
+under `./gradlew testDebugUnitTest` in `.github/workflows/build-apk.yml`. They were
+executed locally for this change against a scratch harness that stubs
+`android.util.Log` and `AndroidOfflineVoice`: **70 tests, 0 failures**, and removing
+the gate reddens exactly the four that assert it. That scratch harness is not
+tracked, so this is a measurement, not reproducible CI evidence. The Activity label
+is verified by inspection only.
+
+**Consequence.** Do not read "the gate is tested" as "the gate is wired". The wiring
+is reviewed, and only the Android job can prove it.
+
 ### L6 — The offline sentinel is partly self-referential
 
 `NetworkSentinel.attempt` is called only from tests. "Zero attempts" is therefore
@@ -195,3 +227,81 @@ That is the honest position, and it is the position the verdict in
 **Updated 2026-11-26 (PR #7).** The test count above was 281 when this section
 was written; it is now 405. The verdict is unchanged, because the count was never
 what the verdict rested on — L1 and L4 are.
+
+---
+
+## 2. Playback-state limitations
+
+### L7 — the terminal read state survives the screen going away, but only once
+
+**Added 2026-11-27 (PR #9, stage S1d).**
+
+Before this stage, a read that finished while the screen was not bound came back as
+`Ready` — the same screen as one that had never been used — because the outcome
+existed only in the memory of a bound client and the service stops itself when a read
+ends.
+
+The service now records how a read ended before it stops, and the screen adopts that
+record when it binds again. Two limits remain, and neither is hidden:
+
+1. **The record is presented once.** It is consumed when shown, so leaving and
+   returning a second time shows `Ready`. Keeping it longer would let the screen
+   claim "Completed" indefinitely, long after the user had started and stopped other
+   reads.
+2. **The service still stops itself on completion.** The outcome is carried around
+   that lifecycle, not through it: a finished read cannot be resumed in place from
+   the service, and no attempt is made to keep it alive.
+
+Not device-validated: that a real screen paints `Completed` after returning is a
+device observation. What is verified is the adoption rule (10 JVM tests), the record's
+round trip through `Prefs`, and the wiring (3 source guards with two negative
+controls). See `SONATA_IMPLEMENTATION_LEDGER.md` §10.
+
+### L24 — a failed voice sample still paints the read's line as failed, live **REPAIRED**
+
+**Added 2026-11-28 (PR #9, stage S1e). Repaired the same day by stage S1f, in the same
+branch — the original text is kept below and the repair follows it.**
+
+Auditioning a voice supersedes the read, so the sample and the passage share one
+listener. §12 of the ledger repaired the **stored** outcome: a sample's failure is no
+longer recorded as the passage's, so a passage the user merely interrupted is not
+reported as having failed when they come back.
+
+What is **not** repaired is the live line. `Client.onError` still delivers the sample's
+message to the bound screen, which sets `readFailure` and can paint
+`PlaybackPhase.FAILED` — "the read stopped" — while the thing that failed was the
+sample. The two symptoms are the same root cause and different surfaces; only the one
+that outlives the session was in scope.
+
+**Consequence.** During a failed sample the screen can misdescribe what failed. Nothing
+is persisted from it, and the passage is not offered as resumable-failed afterwards.
+
+**What it would take.** A client callback that names what failed (or the same in-flight
+fact passed to clients), so the screen can say "the sample could not be played" without
+inventing a read failure. That changes the `SpeechService.Client` contract, which both
+`MainActivity` and `FloatingOverlayService` implement, so it is its own bounded change.
+
+**Repaired 2026-11-28 (stage S1f).** The callback was added, and the contract change
+turned out to be the smaller half of the repair, because the live line had a second
+defect the same fix closes: a sample that *succeeded* was also delivered as
+`onComplete`, so auditioning a voice marked the read as finished.
+
+- `UtteranceAttributionPolicy.liveSurface(inFlight)` answers the live-line question from
+  the same in-flight fact the stored record uses, so the two surfaces cannot disagree.
+- `SpeechService` decides the surface **before** clearing `inFlight`, and delivers
+  through one `notifyTerminal(surface, message)`. A sample's end — success or failure —
+  now reaches `Client.onPreviewEnd`, which both implementers carry:
+  `MainActivity` shows the reason as a notice and repaints the read from its own facts;
+  `FloatingOverlayService` does not dismiss the window, because the window represents
+  the passage.
+- `InFlightUtterance.NONE` maps to the read's line on purpose: "Nothing to read" is
+  dispatched that way, and a message delivered nowhere is not an improvement on a
+  message on the wrong line.
+
+**What is still not claimed.** That the repaired line *renders* is a device
+observation. `MainActivity` and `FloatingOverlayService` are outside the JVM scope
+(`ci/scope.py`), so what is verified here is the policy (4 JVM tests), the wiring (4
+source guards), and compilation in the APK/emulator jobs. After a sample the screen
+repaints to the read's own state — typically `Ready` with the position kept, not
+`Paused`; choosing otherwise is a presentation decision this repair does not make.
+See `SONATA_IMPLEMENTATION_LEDGER.md` §13.

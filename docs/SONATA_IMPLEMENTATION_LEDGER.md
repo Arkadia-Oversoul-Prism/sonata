@@ -484,3 +484,612 @@ The 418 - 405 = 13 delta is exactly the new `TextNormalizerCaseTest` nodes
   without addressing the heading defect.
 - No engine, model, playback, or UI change. `EngineFactory` is still not called
   from the UI, which remains the next slice.
+
+---
+
+### Stage S1a — Which tier actually runs (2026-11-27)
+
+| Field | Value |
+|---|---|
+| Branch | `fix/s1-tier-truth-001` |
+| PR | #9 (draft) |
+| Base | `feature/sonata-tts-app` @ `7c4e6a64e39e34685b06e2e1698cf9eb896b9720` |
+| Tests executed — tracked harness (`ci/run-ci.sh`) | 447 (was 441; **6 new**) |
+| Tests executed — engine suite (`TtsEngine*Test`) | 70 (was 65; **5 new**) |
+| Tests failing | 0 in both |
+| Negative control — policy gate removed | `SynthesisTierPolicyTest` **2 failed / 6** |
+| Negative control — both call sites reverted | `TtsEngineOnlineTest` **4 failed / 46** |
+| CI | not run at the time of writing; this entry is updated only from a real run |
+
+**What was broken.** The engine chose its tier with `preferOnline && url.isNotEmpty()`.
+Both inputs were true in the shipped configuration — `Prefs.preferEdgeTts` defaults
+to `true` and `BackendConfig.DEFAULT_URL` is a live address — so **every read took
+the online tier first**, in a build whose manifest deliberately declares no
+`INTERNET` permission. The consequence was not a theory:
+
+- the first audio of every read waited for three failed attempts and 1.2 s of
+  exponential backoff (`DEFAULT_MAX_RETRIES = 2`, `DEFAULT_RETRY_BASE_DELAY_MS = 400`,
+  both added in PR #7, which made this worse rather than better);
+- the user saw an `UnknownHostException`, which reads as a network fault and is not;
+- the screen reported "Fetching the next part of the passage…" for a fetch that
+  could never succeed;
+- the More row said "Voice: Arkadia neural (…)" while the user was hearing the
+  device's engine.
+
+The three facts — what the user asked for, what address is configured, and whether
+the build can open a socket — were collapsed into two, and the missing one was the
+only one that was not a request.
+
+**What was built.**
+
+| File | Role |
+|---|---|
+| `SynthesisTierPolicy.kt` | The decision, pure JVM: preference + gateway + capability → tier |
+| `TtsSettings.kt` | New `networkReachable`, documented as a capability rather than a preference |
+| `Prefs.kt` | Derives it from the manifest (`checkSelfPermission(INTERNET)`), never hardcoded |
+| `TtsEngine.kt` | `start` and `preview` both route through the policy |
+| `MainActivity.kt` | The More-row label reports the effective tier, not the stored preference |
+| `SynthesisTierPolicyTest.kt` | 6 tests, in the tracked JVM scope |
+
+**Why the capability is read from the manifest and not written as `false`.** A
+hardcoded `false` would be correct today and silently wrong the day the permission
+returns. Asking the manifest means the gate flips by itself, and regression R11 —
+which already fails the build if `INTERNET` comes back — keeps the two from
+disagreeing.
+
+**Why the offline tier reports no error.** A build that cannot reach the network is
+not degrading from a tier it could have used; the device voice *is* its tier.
+Reporting a failure there would be the same untruth in a different place.
+
+**Verification, and its boundary.** The decision is executed by the tracked harness
+(job 1). Its two call sites are not: `TtsEngine.kt` is `FORCED_OUT` in `ci/scope.py`,
+and the Activity needs the Android runtime. The engine's behaviour was therefore
+measured against a scratch harness that stubs `android.util.Log` and
+`AndroidOfflineVoice` — **70 tests, 0 failures**, with the base tree at 65 and the
+same 0 failures, and reverting both call sites reddening exactly the four tests that
+assert the gate. That harness is not tracked, so it is a measurement and not CI
+evidence; `TtsEngineOnlineTest` runs for real under `./gradlew testDebugUnitTest` in
+`build-apk.yml`. Recorded in `SONATA_KNOWN_LIMITATIONS.md` §2 L5a rather than implied
+to be stronger than it is.
+
+**Not claimed.** No device validation. No neural voice. No UI change beyond the label.
+`EngineFactory` is still not called from the UI, so a *saved* narration is still
+unreachable by a user tapping a button — §8.4's next slice is unchanged by this one.
+
+---
+
+### Stage S1b — The progressive-read gate counted requests, not pieces (2026-11-27)
+
+| Field | Value |
+|---|---|
+| Branch | `fix/s1-tier-truth-001` |
+| PR | #9 (draft) |
+| Base | `feature/sonata-tts-app` @ `7c4e6a64e39e34685b06e2e1698cf9eb896b9720` |
+| Parent | `b66932fdd4d5b0728996b811c0fb1edd71903fab` |
+| Candidate | `ba01087e9068a301dd4906a8621a7ce9565835ed` |
+| Changed | 1 file, `app/src/androidTest/.../DeviceProgressiveReadProtocolTest.kt` (+50 / −6) |
+| Instrumented suite | 25 tests, `BUILD SUCCESSFUL` on both runs at the candidate |
+
+#### The defect
+
+`p3_8_the_whole_passage_is_read_not_just_the_opening_piece` ended with
+
+```kotlin
+assertEquals("every piece must be requested exactly once ...", pieces.size, requests.size)
+```
+
+An exact one-to-one between HTTP requests and the passage's pieces. That equality
+does not hold by design, and it failed on the branch's own head:
+
+| Run | Event | Instrumented tests | Result |
+|---|---|---|---|
+| `45926912090` | `push`, `b66932fd` | `failure` | `p3_8 ... expected:<13> but was:<14>` |
+| `45926917172` | `pull_request`, `b66932fd` | `success` | 25 tests, no failure |
+
+Same commit, same workflow, opposite outcome. A gate that reports two verdicts for
+one tree cannot be cited as evidence for either.
+
+#### Why a 14th request is legitimate
+
+`TtsEngine.fetchSegment` retries a piece whose synthesis failed *transiently*, up to
+`DEFAULT_MAX_RETRIES` (2), with a 400 ms then 800 ms backoff.
+`OkHttpTtsTransport` classifies a transport exception, a 5xx, a 429 and an empty
+`200` as transient, and OkHttp retries a broken connection itself. A dropped socket
+under emulator load therefore produces a second request for a piece that was already
+requested — the engine recovering, not the engine misbehaving.
+
+Three other explanations were ruled out against the source rather than assumed away:
+
+- **Not a concurrent double-fetch.** `fetchSegment` re-checks and registers the
+  in-flight index inside `synchronized(fetchLock)`, so two callers cannot both start
+  the same piece.
+- **Not a re-fetch of a played piece.** `schedulePrefetch` walks only forward from
+  `playIndex + 1`, and `playIndex` advances monotonically.
+- **Not a disagreement about the pieces.** The engine plans its segments with the
+  same `SpeechChunker.splitForStreaming` the test calls, on the same text (the
+  fixture has no leading or trailing whitespace for `TextLimits` to trim), so both
+  sides see 13 pieces — which is the number the failure message reported.
+
+That leaves the retry loop as the only source of a 14th request.
+
+#### The repair
+
+The assertion now states what the read must guarantee, and it counts pieces:
+
+| Assertion | Catches |
+|---|---|
+| every piece requested at least once | stopping early, which drops the rest of the passage |
+| no request body carries text outside the passage's pieces | a request the plan never contained |
+| no piece requested more than `1 + TtsEngine.DEFAULT_MAX_RETRIES` times | a request loop, as opposed to a recovery |
+
+A request is matched to a piece by the **longest** piece its body contains, because
+a body carries exactly one piece and the pieces are contiguous slices of the passage.
+Longest-match rather than first-match is what stops a short piece whose text happens
+to recur elsewhere from claiming another piece's request.
+
+#### Evidence
+
+| Check | Where | Result |
+|---|---|---|
+| Assertion logic, positive: each piece once | Python replica of the fixture | pass |
+| Assertion logic, positive: one piece retried (14 requests for 13 pieces) | Python replica | pass |
+| Negative control: last three pieces dropped | Python replica | fails on *missing* |
+| Negative control: one out-of-plan request | Python replica | fails on *unknown* |
+| Negative control: one piece requested 4× | Python replica | fails on *over budget* |
+| Compile of the instrumented sources | CI `compileDebugAndroidTestKotlin` | pass |
+| Instrumented suite | CI run `45938561004` (push) | 25 tests, `BUILD SUCCESSFUL` |
+| Instrumented suite | CI run `45938565202` (`pull_request`) | 25 tests, `BUILD SUCCESSFUL` |
+
+#### Not claimed
+
+- **The Kotlin was not compiled in the sandbox that wrote it.** There is no JDK and
+  no Android SDK there, so `compileDebugAndroidTestKotlin` and the emulator run are
+  the compile and the execution evidence — not this entry.
+- **Two consecutive passes do not prove the flake is gone.** The original defect
+  appeared on one of two runs at `b66932fd`; the candidate has now passed twice. What
+  the change does establish is that the assertion no longer depends on a property the
+  engine does not guarantee, which is the reason the flake existed.
+- **This test can no longer detect an audible double-play.** It never measured that:
+  a repeat *request* is not a repeat *playback*, and the engine plays staged files by
+  index. Nothing is lost — the property it claimed was not the property it measured —
+  but the claim is now stated correctly instead of being carried by a proxy.
+- **No device validation, no neural voice, no product behaviour change.** One test
+  assertion changed; `app/src/main` is untouched.
+
+---
+
+## 9. S1 — a finished read and a failed read are now distinguishable (append-only)
+
+**Date:** 2026-11-27
+**Base:** `7c4e6a64e39e34685b06e2e1698cf9eb896b9720` (branch `fix/s1-tier-truth-001`, PR #9)
+**Parent of this change:** `ef6f979663a371123c194e7fbb917ef7a9c0b2f0`
+**Code commit:** `f32b3b8e2e0cea227d975d4992a2a44dc3369e1c`
+
+### 9.1 The defect
+
+The reading screen decided its state line from the engine alone:
+
+```kotlin
+binding.tvState.text = when {
+    playing && svc?.isBufferingNext == true -> getString(R.string.state_buffering)
+    playing -> getString(R.string.state_speaking)
+    paused -> getString(R.string.state_paused)
+    bound -> getString(R.string.state_ready)
+    else -> getString(R.string.state_starting)
+}
+```
+
+A read that reached the end of the passage and a read that failed both fall
+through to `bound -> "Ready"`, with the substate `"Paste text, or select some in
+any app"`. That is the same screen as one that was never used, so **the user is
+never told the read finished, and a failure is only ever a transient notice**.
+
+Neither fact is recoverable from the engine: `TtsEngine` has no completion state
+(it returns to idle), and `SpeechService` calls `stopSelf()` on both completion
+and terminal error, so the service is gone by the time the screen re-renders.
+`SpeechService.lastError` existed and was read by nobody.
+
+Two further consequences of the same shape:
+
+- **The synthesis wait was invisible.** Between `dispatch()` and the first audio
+  the engine is neither playing nor paused, so `render()` showed `Ready` — the
+  "inadequate visible synthesis/loading state" item in the S1 contract.
+- **The two lines could disagree.** The state and the substate were decided by
+  two independent `when` blocks, so any new state had to be added twice.
+
+### 9.2 The change
+
+| File | Role |
+|---|---|
+| `PlaybackPhase.kt` (new, pure JVM) | `PlaybackPhase`, `PlaybackObservation`, `PlaybackPhasePolicy.decide` — one decision over every input |
+| `MainActivity.kt` | records the read's own facts (`readPreparing`, `readCompleted`, `readFailure`), renders both lines from the single phase |
+| `values/strings.xml` | `state_completed`, `state_failed`, `substate_completed` |
+| `PlaybackPhaseTest.kt` (new, JVM) | 14 tests over the decision table and its precedence |
+| `narration-core/…/PlaybackPhaseWiringTest.kt` (new) | 2 wiring guards, including a negative control |
+
+Precedence, highest first: buffering → playing → paused → failed → completed →
+preparing → ready → starting. **Live playback outranks the terminal facts on
+purpose**: an error that fell back to the offline voice leaves a message behind
+while the read continues, and a stale `completed` must not hide a read that is
+running now.
+
+`onComplete` records completion *before* the service stops itself;
+`onServiceDisconnected` deliberately leaves it alone, because that disconnect is
+the normal consequence of `stopSelf()`. A deliberate `stopRead()` clears all
+three flags: an abandoned read is neither finished nor failed.
+
+### 9.3 Why the wiring guard is not beside the policy
+
+`ci/scope.py` derives the app module's JVM scope by class reference and excludes
+any file that names a class declared by an Android-bound file — **including
+inside a string literal**. A guard that names the reading screen was therefore
+`OUT` of the JVM job: measured, `python3 ci/scope.py | grep PlaybackPhaseTest`
+returned `OUT`, and the 16 new tests counted **0** in `total_tests`. It lives in
+`narration-core` instead, which `narration-core/build.sh` compiles in full and
+whose working directory is the module root.
+
+### 9.4 Evidence (run in this sandbox)
+
+A JDK and the Kotlin compiler were provisioned here (Temurin `17.0.21.1`,
+kotlinc `1.9.24`, jars from Maven Central and Google Maven), so the tracked
+harness ran locally rather than only in GitHub Actions.
+
+| Check | Command | Result |
+|---|---|---|
+| Baseline at `ef6f979`, clean tree | `bash ci/run-ci.sh --check` | `total_tests=447`, job1 exit 0, job2 exit 0 |
+| With the change | `bash ci/run-ci.sh --check` | `total_tests=463`, job1 exit 0, job2 exit 0 |
+| Attribution | `grep -c @Test` on the two new files | 14 + 2 = **16**, exactly the delta |
+| **Live negative control** — wiring stripped from the real screen | `./narration-core/build.sh` | `Tests run: 171, Failures: 1`, exit **1**, naming all three missing properties |
+| Restored, harness re-run | `bash ci/run-ci.sh --check` | `total_tests=463`, job1/job2 exit 0 |
+
+`ci-evidence.log` was deliberately **not** rewritten: the other open PR on this
+repository (#10) also rewrites it wholesale, so regenerating it here would make a
+guaranteed textual conflict in a file that carries no reasoning. The numbers
+above are the record; the log is regenerated by whoever merges last.
+
+### 9.5 Not claimed
+
+- **Not device-validated.** That a real screen paints these two lines is a device
+  observation that was not made here; the phase decision and the wiring are
+  verified as code and as source.
+- **Completion is lost if it happens while the screen is away.** `onStop()`
+  removes the client, so a read that finishes while the app is backgrounded
+  returns to `Ready`. Carrying the outcome in the service is impossible while
+  `onComplete` calls `stopSelf()`; changing that lifecycle is a separate slice,
+  not part of this one.
+- **No engine, model, or neural-tier change.** `EngineFactory` still has no
+  caller on this branch — that is #10's slice, not this one.
+
+---
+
+## 10. S1 — a read that ends while the screen is away now reports how it ended (append-only)
+
+**Date:** 2026-11-27. **Base:** `2276b9d`. This continues §9 and closes the first of
+its two recorded gaps.
+
+### 10.1 The defect
+
+§9.5 recorded it: *"Completion is lost if it happens while the screen is away.
+`onStop()` removes the client, so a read that finishes while the app is
+backgrounded returns to `Ready`."* The same holds for a terminal failure.
+
+`MainActivity.onStop()` removes `uiClient` and unbinds, and the service stops itself
+the moment a read ends. So the two facts that make `PlaybackPhase.COMPLETED` and
+`PlaybackPhase.FAILED` reachable existed only in the memory of a bound screen:
+
+```
+                    before                                    after
+──────────────────────────────────────────────  ──────────────────────────────────────────────
+read ends while away   service dies with the fact         the service records it before stopSelf()
+screen returns         onServiceConnected → READY         adopts the record → COMPLETED / FAILED
+read of another text   —                                    withheld (passages must match exactly)
+live read on return    —                                    withheld (live state outranks a stored fact)
+position after finish  last mid-read checkpoint survives    reset, so no "carry on" for a finished read
+```
+
+The stale-position half is the same defect seen from the resume side: the ticker
+checkpoints at `CHECKPOINT_MS` and nothing wrote a final position, so a completed
+passage could still offer "Carry on from 80%" for text the user had heard to the end.
+
+### 10.2 The change
+
+| File | Role |
+|---|---|
+| `ReadOutcome.kt` (new, pure JVM) | `ReadOutcome`, `ReadOutcomePolicy.adopt` — whether a stored outcome may be presented |
+| `Prefs.kt` | `rememberOutcome` / `consumeOutcome` / `clearOutcome` — the record survives the service |
+| `SpeechService.kt` | records `COMPLETED` (and resets the resume position) or a terminal `FAILED`, before `stopSelf()`; a `reading` flag keeps a preview's failure out of the passage's record |
+| `MainActivity.kt` | `adoptStoredOutcome()` on the bind path; `dispatch()` clears a superseded record |
+| `ReadOutcomeTest.kt` (new, JVM) | 10 tests over the adoption rule |
+| `narration-core/…/ReadOutcomeWiringTest.kt` (new) | 3 wiring guards with two negative controls |
+
+The rule is deliberately conservative, in the same spirit as `ResumePoint`: an
+outcome is presented only when it exists, no read is live, the field is non-blank,
+and the stored passage matches the current text **exactly**. Editing the passage —
+even by appending — withholds it. A wrong "Completed" is worse than a missing one.
+
+The record is presented **once** (`consumeOutcome`). Keeping it after it has been
+shown would let the screen claim "Completed" indefinitely, long after the user
+started and stopped other reads. Leaving and returning a second time therefore shows
+`Ready`, which is truthful: nothing is being read.
+
+### 10.3 Why the guard requires a call, not a definition
+
+The first cut of the screen guard passed on a screen that *defined*
+`adoptStoredOutcome()` but never called it — measured, `OK (174 tests)` with the call
+line deleted. That is the same defect one level down: a correct adoption path that
+nothing runs. The guard now requires the call on the bind path
+(`addClient(uiClient)` followed by `adoptStoredOutcome()`), and the negative control
+asserts exactly that finding.
+
+### 10.4 Evidence (run in this sandbox)
+
+Toolchain: Temurin `17.0.21.1`, kotlinc `1.9.24`, the classpath jars the tracked
+harness names, all fetched from Maven Central / Google Maven into `/opt/tools`.
+
+| Check | Command | Result |
+|---|---|---|
+| Baseline at `2276b9d`, clean tree | `bash ci/run-ci.sh --check` | `total_tests=463`, job1 0, job2 0 |
+| With the change | `bash ci/run-ci.sh --check` | `total_tests=476`, job1 0, job2 0 |
+| Attribution | `grep -c @Test` on the two new files | 10 + 3 = **13**, exactly the delta |
+| **Live negative control** — the two `rememberOutcome` calls removed from the real service | `./narration-core/build.sh` | `Tests run: 174, Failures: 1`, naming *both* missing records |
+| **Live negative control** — only the bind-path call removed from the real screen | `./narration-core/build.sh` | exit **1**, `Failures: 1`, naming *"the screen does not adopt an outcome when it binds"* |
+| Both restored, harness re-run | `bash ci/run-ci.sh --check` | `total_tests=476`, job1 0, job2 0 |
+
+`ci-evidence.log` is again left untouched: the other open PR (#10) rewrites it
+wholesale, and the numbers above are the record.
+
+### 10.5 Not claimed
+
+- **Not device-validated.** That a real screen paints `Completed` after returning is
+  a device observation that was not made here. What is verified is the decision
+  table, the record's round trip through `Prefs`, and the wiring.
+- **The service still stops itself on completion.** This slice carries the outcome
+  around that lifecycle; it does not change it. A read that ends is still not
+  resumable in place, and no attempt is made to keep the service alive.
+- **A preview's failure is deliberately not recorded.** `reading` is false for a
+  preview, so a sample that cannot be synthesised cannot claim the passage failed.
+- **No engine, model, or neural-tier change.** `EngineFactory` still has no caller on
+  this branch — that is #10's slice.
+
+---
+
+## 11. S1 — the preparing phase now keeps itself alive, and expires (append-only)
+
+**Date:** 2026-11-28
+**Base:** `3e034cae047366a72d3fd0d201036db2a111acc3` (branch `fix/s1-tier-truth-001`, PR #9)
+**Continued, not duplicated:** an attempt to open a separate PR for this was abandoned
+after `git merge` of this branch showed it already carried `PlaybackPhase.PREPARING`.
+
+### 11.1 What §9 and §10 left open
+
+§9 gave the screen a `PREPARING` phase, so the line stops reverting to "Ready". Two
+things still did not follow from it:
+
+1. **Nothing repainted.** The ticker's continue test was still the engine's own
+   `isPlaying || isPaused`. During preparation the engine is neither, so the ticker
+   ran exactly one pass, painted the phase, and stopped. The screen could say
+   "Preparing…" and had no way to notice it ending — or not ending.
+2. **The wait had no deadline.** `readPreparing` is a fact the *screen* holds; the
+   engine will never correct it. A service that dies or never calls back left
+   "Preparing…" on screen for ever, which is indistinguishable from a stuck screen
+   and is a false claim that work is still in progress.
+
+### 11.2 The change
+
+`PlaybackPhasePolicy` gains the two facts the screen needs, both pure and both
+tested here:
+
+- `keepsTicking(phase)` — true for BUFFERING / PLAYING / PAUSED / **PREPARING**.
+- `PREPARE_TIMEOUT_MS` (20 s) and `preparationExpired(waitedMs)`.
+
+`MainActivity` records the dispatch instant, settles an over-long wait before each
+paint and on `onResume`, and uses one `surfacePhase()` for both the painter and the
+ticker. An expired wait is recorded as **FAILED** with a reason — the existing phase
+— never as a silent reset to "Ready": a read nobody heard must not look like one
+that was never asked for.
+
+### 11.3 Evidence (run in this sandbox)
+
+| Check | Command | Result |
+|---|---|---|
+| This branch at `3e034ca`, clean tree | `./ci/run-ci.sh --check` | `total_tests=476`, job1/job2 exit 0 |
+| With this change | `./ci/run-ci.sh --check` | `total_tests=481`, job1/job2 exit 0 |
+| `PlaybackPhaseTest` alone | `JUnitCore …PlaybackPhaseTest` | `OK (19 tests)` |
+| **Negative control** — `PREPARING` moved to the `false` arm of `keepsTicking` | `JUnitCore …PlaybackPhaseTest` | `Tests run: 19, Failures: 2` — `a preparation keeps the ticker running` and its control |
+| Fix restored, byte-identical (`cmp -s`) | — | restored |
+
+476 → 481 = +5, exactly the new `PlaybackPhaseTest` methods.
+
+### 11.4 Not claimed
+
+- **Not device-validated.** `MainActivity` is outside the JVM scope (`ci/scope.py`),
+  so the wiring is proven by compilation in the APK/emulator CI jobs, not here.
+- **No engine, model, transport or playback change.** The wait is presented and
+  bounded; how long synthesis actually takes is unchanged and unmeasured here.
+
+## 12. S1 — a terminal event belongs to what is in flight, not to a boolean (append-only)
+
+**Date:** 2026-11-28
+**Base:** `b9bbf845394d7a7efbce49b0e0850a325f240363` (branch `fix/s1-tier-truth-001`, PR #9)
+**Continued, not duplicated:** this is the invariant §10 states and does not hold.
+
+### 12.1 The defect
+
+§10 recorded the rule — "a preview's failure is not a read's, so it is not recorded"
+— and implemented it with a boolean:
+
+```kotlin
+private var reading = false      // "true from the moment a read is dispatched"
+...
+if (reading) prefs.rememberOutcome(currentText, FAILED, msg)
+```
+
+A boolean cannot answer the question it is asked. Auditioning a voice is a
+deliberate, supported path *during* a read: `MainActivity.previewVoice()` records the
+reading position first, and its own comment says so — "auditioning a voice stops the
+read". It dispatches `ACTION_PREVIEW`, which the service handles in a separate branch.
+That branch never touches `reading`, so:
+
+| step | `reading` | what the service believes |
+|---|---|---|
+| user reads a passage | `true` | a read is in progress |
+| user auditions a voice → sample supersedes the read | `true` | a read is still in progress — **false** |
+| the sample fails | `true` | "the read failed" |
+| service stops; outcome stored | — | **passage recorded FAILED**, with the sample's message |
+
+The user's passage was interrupted by their own action; it did not fail. The stored
+outcome then survives the service, and `ReadOutcomePolicy.adopt` presents it on the
+next bind, because the passage matches. So the claim outlives the session: a passage
+the user only *interrupted* is reported as having failed.
+
+The completion path was already correct — it tests `tts.isPreviewing` — but the error
+path tests nothing, and `TtsEngine.preview` clears `isPreviewing` **before** it invokes
+`onError`, so the engine's flag cannot be consulted there even in principle.
+
+### 12.2 The change
+
+One fact replaces the boolean: `InFlightUtterance { NONE, READ, PREVIEW }`, set on
+dispatch by each of the three dispatch sites and cleared when an utterance ends.
+`UtteranceAttributionPolicy` turns "what is in flight" plus "which terminal event" into
+`TerminalRecord { COMPLETION, FAILURE, NONE }`, and only `READ` produces a record.
+
+```
+terminal event   in flight = READ          in flight = PREVIEW / NONE
+───────────────  ────────────────────────  ───────────────────────────────
+completion       record COMPLETED           record nothing (sample / unattributable)
+terminal error   record FAILED              record nothing
+```
+
+Both terminal paths now ask the policy, so the rule lives in one place instead of
+being re-derived at each site — which is how the two sites came to disagree.
+
+`NONE` recording nothing is not a formality: an outcome arriving with nothing in
+flight is unattributable, and an unattributable outcome is worse than none.
+
+### 12.3 Evidence (run in this sandbox)
+
+The JDK 17 / kotlinc 1.9.22 toolchain and the nine classpath jars were provisioned in
+this sandbox, so the tracked harness ran here rather than only in Actions.
+
+| Check | Command | Result |
+|---|---|---|
+| Baseline reproduced at `b9bbf84`, clean tree | `./ci/run-ci.sh --check` | `total_tests=481`, job1/job2 exit 0 — matches §11 |
+| With this change | `./ci/run-ci.sh --check` | `total_tests=490`, job1/job2 exit 0 |
+| `UtteranceAttributionTest` | job 1 (compiled in scope: pure JVM) | 7 tests, pass |
+| `UtteranceAttributionWiringTest` | job 2 | 2 tests, pass |
+| **Negative control A** — pre-repair `SpeechService.kt` restored from `HEAD`, everything else unchanged | `./ci/run-ci.sh --check` | `job 2: exit=1`; `There were 2 failures`, and the guard reported all five defects: *a dispatched passage is not recorded as the read in flight · a dispatched sample is not recorded as the sample in flight · completion is not decided by UtteranceAttributionPolicy.onComplete · a terminal error is not decided by UtteranceAttributionPolicy.onTerminalError · the service still holds a bare 'reading' flag* |
+| **Negative control B** — in-suite, on the real file | `UtteranceAttributionWiringTest.the wiring guard detects the pre-repair service` | rewrites the live source back to the pre-repair shapes and asserts the same five defects, in order |
+| Fix restored, byte-identical (`cmp -s`) | `./ci/run-ci.sh --check` | `total_tests=490`, job1/job2 exit 0 |
+
+481 → 490 = **+9**, which is exactly the 7 new `UtteranceAttributionTest` methods plus
+the 2 wiring nodes — no existing test changed outcome.
+
+Control A is the one that matters: it is a *live* control on the real file, not a
+fixture. It fails with the five-defect message above, which names the passage/sample
+attribution explicitly, so neither predicate is vacuous.
+
+### 12.4 Not claimed
+
+- **Not device-validated.** `SpeechService.kt` is `OUT` of the JVM scope
+  (`ci/scope.py`), so the wiring is proven by compilation in the APK/emulator jobs and
+  by the source guard, not by execution on a device. No physical-device behaviour is
+  claimed for this change.
+- **The transient screen is unchanged.** `Client.onError` still delivers a sample's
+  failure to the bound screen, which sets `readFailure` and can paint
+  `PlaybackPhase.FAILED` while the sample is what failed. This change fixes the
+  *stored* claim (which outlives the session); the *live* line during a failed sample
+  is the next bounded task, and is recorded in `SONATA_KNOWN_LIMITATIONS.md` L24 rather
+  than half-repaired here.
+- **No engine, transport, model or playback change.** `TtsEngine.isPreviewing` is no
+  longer read by the service; the property is left in place because the engine still
+  uses it internally.
+
+## 13. S1 — a terminal event reaches the line it belongs to (append-only)
+
+**Date:** 2026-11-28
+**Base:** `f488815df765c67ea27587b92bd53786b323a544` (branch `fix/s1-tier-truth-001`, PR #9)
+**Continued, not duplicated:** L24 in `SONATA_KNOWN_LIMITATIONS.md` names this as the
+next bounded change, and §12 records the surface it left unrepaired.
+
+### 13.1 The defect
+
+§12 repaired the **stored** outcome: a sample's terminal event is no longer recorded as
+the passage's. The **live** line was untouched, and it had two halves.
+
+```kotlin
+// the service, before this change — every terminal event, every client
+clients.forEach { it.onError(msg) }
+clients.forEach { it.onComplete() }
+```
+
+| what the user did | what was in flight | what the screen said |
+|---|---|---|
+| read a passage, auditioned a voice, the sample failed | `PREVIEW` | **"the read stopped"** (`readFailure` set → `FAILED`) |
+| read a passage, auditioned a voice, the sample succeeded | `PREVIEW` | **the read finished** (`readCompleted = true`) — or, after section 12's early return, "playing the sample" for ever |
+| pressed Read on an empty passage | `READ` | "Nothing to read" (correct) |
+
+Both rows are claims the application did not observe. The passage was interrupted by
+the user, so it neither failed nor finished.
+
+The stored outcome and the live line are two surfaces of one question — *what is this
+event about?* — and §12 answered it for one surface only.
+
+### 13.2 The change
+
+```kotlin
+// UtteranceAttribution.kt
+fun liveSurface(inFlight: InFlightUtterance): LiveSurface =
+    if (inFlight == InFlightUtterance.PREVIEW) LiveSurface.PREVIEW
+    else LiveSurface.READ
+```
+
+```
+                          before                              after
+──────────────────────────────────────────  ─────────────────────────────────────────────
+delivery                  two call sites, each   one notifyTerminal(surface, message),
+                          delivering to every     surface from the policy
+                          client unconditionally
+surface decided           — nowhere              before `inFlight` is cleared; an event
+                                                  whose fact was erased first is
+                                                  unattributable and reads as the read's
+sample ends               onError / onComplete   Client.onPreviewEnd(message?)
+                                                  MainActivity: notice + repaint from the
+                                                  read's own facts
+                                                  FloatingOverlayService: no stopSelf —
+                                                  the window represents the passage
+NONE                      onError               onError (unchanged, deliberately)
+```
+
+Why `NONE` stays on the read's line: an unattributable event is not the same as an
+undeliverable one. `"Nothing to read"` is dispatched with nothing in flight, and
+withholding it would trade a wrong message for a missing one.
+
+### 13.3 Verification
+
+The tracked harness ran in this environment (`JDK 17` + `kotlinc 1.9.22`, both
+provisioned here; the preflight caught two platform jars that Maven Central does not
+serve and reported `TOOLCHAIN_BROKEN` rather than a code failure).
+
+| Check | Result |
+|---|---|
+| `./ci/run-ci.sh --check` at base `f488815` | `total_tests=490`, job1_exit=0, job2_exit=0 — reproduces §12's recorded figure |
+| With this change | `total_tests=498`, job1_exit=0, job2_exit=0 — **+8** = 4 policy methods (`UtteranceAttributionTest`) + 4 guards (`LiveLineAttributionWiringTest`) |
+| **Negative control (live)** — `SpeechService.kt` restored to `clients.forEach { it.onError(msg) }`, everything else unchanged | `Tests run: 180, Failures: 1` — `LiveLineAttributionWiringTest.the service delivers a terminal event to the surface the policy names` |
+| **Negative control (live)** — `readFailure = message` put back into `MainActivity.onPreviewEnd` | `Tests run: 180, Failures: 2` — the implementer guard and its own in-suite control |
+| Each fix restored, byte-identical (`cmp -s`) | `OK (180 tests)` |
+
+One test failed on first run and was **corrected, not weakened**: `the sample's line is
+used exactly when the read's record is refused` asserted the agreement over
+`InFlightUtterance.values()`, which is false for `NONE` by design (§13.2). The property
+now states its domain.
+
+### 13.4 Not claimed
+
+- **Not device-validated.** `MainActivity` and `FloatingOverlayService` are outside the
+  JVM scope, so the wiring is proven by source guards plus compilation in the APK and
+  emulator jobs. No screen behaviour on a physical device is claimed.
+- **No engine, model, transport or playback change.** This changes who is told, not
+  what is spoken.
+- **The repainted line is `Ready`, not `Paused`,** after a sample ends. The position is
+  kept (`previewVoice()` calls `rememberProgress()` first), so the read is resumable;
+  which phase *presents* that is a separate decision, recorded in L24.
